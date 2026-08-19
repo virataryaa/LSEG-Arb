@@ -65,6 +65,17 @@ per-contract data):
 | CC | 0.99940 | 1.00000 | 0.000% | 0.000% |
 | LCC | 1.00000 | 1.00000 | 0.056% | 0.055% |
 
+## A spike you might notice around Aug-Sep 2024
+
+The CC/LCC spread swings from about +3000 to -2500 $/MT in a few weeks
+during that window. This was checked directly against the raw daily
+data and against ICE's own archived `front_LCC.parquet` — **ICE's data
+shows the identical jump on the identical dates** (e.g. LCC px1
+6293 -> 5677 on 2024-08-27, matching to the dollar). So this isn't an
+LSEG-migration artifact; it's inherited behavior from the source data
+itself, most likely a genuine large term-structure move during the 2024
+cocoa price crisis rather than a back-adjustment bug. Left as-is.
+
 ## Running it
 
 ```bash

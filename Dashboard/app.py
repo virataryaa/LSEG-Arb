@@ -95,11 +95,6 @@ with st.sidebar:
     st.markdown("**Windows**")
     zscore_win = st.slider("Z-score lookback (days)", 60, 504, 252, step=21)
 
-    st.divider()
-    st.markdown("**Signal thresholds**")
-    z_entry = st.number_input("Entry z-score", value=1.5, step=0.1, format="%.1f")
-    z_exit  = st.number_input("Exit z-score",  value=0.5, step=0.1, format="%.1f")
-
 # ── Build spread ──────────────────────────────────────────────────────────────
 
 def _pick(name: str) -> pd.Series:
@@ -251,13 +246,9 @@ with st.expander("Section 2 — Spread Monitor", expanded=True):
 
     # — Z-score —
     fig_z = go.Figure()
-    fig_z.add_hrect(y0=z_entry, y1=4,   fillcolor=RED,   opacity=0.06, line_width=0)
-    fig_z.add_hrect(y0=-4, y1=-z_entry, fillcolor=GREEN, opacity=0.06, line_width=0)
     fig_z.add_trace(go.Scatter(
         x=z.index, y=z, name="Z-score",
         line=dict(color=TEAL, width=1.5)))
-    for level, color in [(z_entry, RED), (-z_entry, GREEN), (z_exit, AMBER), (-z_exit, AMBER)]:
-        fig_z.add_hline(y=level, line_dash="dot", line_color=color, line_width=1)
     fig_z.add_hline(y=0, line_color=MUTED, line_width=1)
     base_layout(fig_z, title=f"Z-Score  ({zscore_win}d rolling)",
                 yaxis=dict(gridcolor=GRID, linecolor=GRID,
