@@ -171,7 +171,7 @@ else:
 # SECTION 1 — Return Scatter
 # ══════════════════════════════════════════════════════════════════════════════
 
-with st.expander("Section 1 — Return Scatter", expanded=False):
+with st.expander("Section 1 — Return Scatter", expanded=True):
     st.caption("Daily price changes of each leg plotted against each other. "
                "The slope shows how many $/MT one market moves per $/MT move in the other. "
                "Recent days (last 60) are highlighted — divergence from the full-history "
@@ -227,7 +227,7 @@ with st.expander("Section 1 — Return Scatter", expanded=False):
 # SECTION 2 — Spread Monitor
 # ══════════════════════════════════════════════════════════════════════════════
 
-with st.expander("Section 2 — Spread Monitor", expanded=False):
+with st.expander("Section 2 — Spread Monitor", expanded=True):
     st.caption("Spread level with rolling mean and 1/2 standard deviation bands. "
                "The z-score panel shows where the spread sits relative to its own history.")
 
@@ -284,7 +284,7 @@ with st.expander("Section 2 — Spread Monitor", expanded=False):
 # ══════════════════════════════════════════════════════════════════════════════
 
 if not has_fx:
-    with st.expander("Section 3 — Ratio", expanded=False):
+    with st.expander("Section 3 — Ratio", expanded=True):
         st.caption("Ratio of Arabica to Robusta price (both in $/MT). "
                    "Roasters blend the two; extreme ratios historically mean-revert "
                    "as substitution economics kick in.")
