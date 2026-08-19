@@ -172,11 +172,6 @@ else:
 # ══════════════════════════════════════════════════════════════════════════════
 
 with st.expander("Section 1 — Return Scatter", expanded=True):
-    st.caption("Daily price changes of each leg plotted against each other. "
-               "The slope shows how many $/MT one market moves per $/MT move in the other. "
-               "Recent days (last 60) are highlighted — divergence from the full-history "
-               "regression may signal a regime shift.")
-
     dl1  = l1.diff().dropna()
     dl2  = l2.diff().dropna()
     scat = pd.concat([dl1.rename("leg1"), dl2.rename("leg2")], axis=1).dropna()
