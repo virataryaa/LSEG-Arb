@@ -85,6 +85,13 @@ with st.sidebar:
                     index=0, label_visibility="collapsed")
     pair_key = "KCRC" if pair.startswith("KC") else "CCLCC"
 
+    if pair_key == "KCRC":
+        st.divider()
+        st.markdown("**Units**")
+        unit_choice = st.radio("Units", ["$/MT", "¢/lb"], index=0, label_visibility="collapsed")
+    else:
+        unit_choice = "$/MT"
+
     st.divider()
     st.markdown("**Price source**")
     contract_choice = st.radio("Contract", ["1st month (actual)", "2nd month (actual)"],
@@ -107,8 +114,10 @@ if pair_key == "KCRC":
     rc_s    = _pick("RC")
     kc_mt   = kc_s * KC_FACTOR
     spread  = (kc_mt - rc_s).dropna()
-    leg1_label, leg2_label = "KC ($/MT)", "RC ($/MT)"
-    spread_label = "Arabica Premium over Robusta ($/MT)"
+    if unit_choice == "¢/lb":
+        spread = spread / KC_FACTOR
+    leg1_label, leg2_label = f"KC ({unit_choice})", f"RC ({unit_choice})"
+    spread_label = f"Arabica Premium over Robusta ({unit_choice})"
     pair_title   = f"KC / RC  —  Arabica vs Robusta  [{src_tag}]"
     has_fx       = False
 else:
@@ -158,6 +167,9 @@ sig = spread.rolling(zscore_win).std()
 if pair_key == "KCRC":
     l1 = (_pick("KC") * KC_FACTOR).loc[str(d_start):str(d_end)]
     l2 = _pick("RC").loc[str(d_start):str(d_end)]
+    if unit_choice == "¢/lb":
+        l1 = l1 / KC_FACTOR
+        l2 = l2 / KC_FACTOR
 else:
     l1 = _pick("CC").loc[str(d_start):str(d_end)]
     l2 = (_pick("LCC") * gbp_raw).dropna().loc[str(d_start):str(d_end)]
@@ -166,130 +178,134 @@ else:
 # SECTION 1 — Spread Monitor
 # ══════════════════════════════════════════════════════════════════════════════
 
-with st.expander("Section 1 — Spread Monitor", expanded=True):
-    st.caption("Spread level with rolling mean and 1/2 standard deviation bands. "
-               "The z-score panel shows where the spread sits relative to its own history.")
+st.subheader("Spread Monitor")
+st.caption("Spread level with rolling mean and 1/2 standard deviation bands. "
+           "The z-score panel shows where the spread sits relative to its own history.")
 
-    # — Spread + bands —
-    fig_sp = go.Figure()
-    fig_sp.add_trace(go.Scatter(
-        x=spread.index, y=mu + 2*sig, name="+2σ",
-        line=dict(color=RED, width=1, dash="dot"), showlegend=True))
-    fig_sp.add_trace(go.Scatter(
-        x=spread.index, y=mu + sig, name="+1σ",
-        line=dict(color=AMBER, width=1, dash="dash"), showlegend=True))
-    fig_sp.add_trace(go.Scatter(
-        x=spread.index, y=mu, name="Mean",
-        line=dict(color=MUTED, width=1.5), showlegend=True))
-    fig_sp.add_trace(go.Scatter(
-        x=spread.index, y=mu - sig, name="-1σ",
-        line=dict(color=AMBER, width=1, dash="dash"), showlegend=False))
-    fig_sp.add_trace(go.Scatter(
-        x=spread.index, y=mu - 2*sig, name="-2σ",
-        line=dict(color=RED, width=1, dash="dot"), showlegend=False))
-    fig_sp.add_trace(go.Scatter(
-        x=spread.index, y=spread, name="Spread",
-        line=dict(color=TEAL, width=2), showlegend=True))
-    base_layout(fig_sp, title=spread_label)
-    st.plotly_chart(fig_sp, use_container_width=True)
+# — Spread + bands —
+fig_sp = go.Figure()
+fig_sp.add_trace(go.Scatter(
+    x=spread.index, y=mu + 2*sig, name="+2σ",
+    line=dict(color=RED, width=1, dash="dot"), showlegend=True))
+fig_sp.add_trace(go.Scatter(
+    x=spread.index, y=mu + sig, name="+1σ",
+    line=dict(color=AMBER, width=1, dash="dash"), showlegend=True))
+fig_sp.add_trace(go.Scatter(
+    x=spread.index, y=mu, name="Mean",
+    line=dict(color=MUTED, width=1.5), showlegend=True))
+fig_sp.add_trace(go.Scatter(
+    x=spread.index, y=mu - sig, name="-1σ",
+    line=dict(color=AMBER, width=1, dash="dash"), showlegend=False))
+fig_sp.add_trace(go.Scatter(
+    x=spread.index, y=mu - 2*sig, name="-2σ",
+    line=dict(color=RED, width=1, dash="dot"), showlegend=False))
+fig_sp.add_trace(go.Scatter(
+    x=spread.index, y=spread, name="Spread",
+    line=dict(color=TEAL, width=2), showlegend=True))
+base_layout(fig_sp, title=spread_label)
+st.plotly_chart(fig_sp, use_container_width=True)
 
-    # — Z-score —
-    fig_z = go.Figure()
-    fig_z.add_trace(go.Scatter(
-        x=z.index, y=z, name="Z-score",
-        line=dict(color=TEAL, width=1.5)))
-    fig_z.add_hline(y=0, line_color=MUTED, line_width=1)
-    base_layout(fig_z, title=f"Z-Score  ({zscore_win}d rolling)",
-                yaxis=dict(gridcolor=GRID, linecolor=GRID,
-                           tickfont=dict(color=MUTED), range=[-4, 4]))
-    st.plotly_chart(fig_z, use_container_width=True)
+# — Z-score —
+fig_z = go.Figure()
+fig_z.add_trace(go.Scatter(
+    x=z.index, y=z, name="Z-score",
+    line=dict(color=TEAL, width=1.5)))
+fig_z.add_hline(y=0, line_color=MUTED, line_width=1)
+base_layout(fig_z, title=f"Z-Score  ({zscore_win}d rolling)",
+            yaxis=dict(gridcolor=GRID, linecolor=GRID,
+                       tickfont=dict(color=MUTED), range=[-4, 4]))
+st.plotly_chart(fig_z, use_container_width=True)
 
-    # — Individual legs —
-    fig_legs = go.Figure()
-    fig_legs.add_trace(go.Scatter(x=l1.index, y=l1, name=leg1_label,
-                                  line=dict(color=TEAL, width=1.5)))
-    fig_legs.add_trace(go.Scatter(x=l2.index, y=l2, name=leg2_label,
-                                  line=dict(color=AMBER, width=1.5)))
-    base_layout(fig_legs, title="Individual Legs ($/MT)",
-                yaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED)))
-    st.plotly_chart(fig_legs, use_container_width=True)
+# — Individual legs —
+fig_legs = go.Figure()
+fig_legs.add_trace(go.Scatter(x=l1.index, y=l1, name=leg1_label,
+                              line=dict(color=TEAL, width=1.5)))
+fig_legs.add_trace(go.Scatter(x=l2.index, y=l2, name=leg2_label,
+                              line=dict(color=AMBER, width=1.5)))
+base_layout(fig_legs, title=f"Individual Legs ({unit_choice})",
+            yaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED)))
+st.plotly_chart(fig_legs, use_container_width=True)
+
+st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 2 — Return Scatter
 # ══════════════════════════════════════════════════════════════════════════════
 
-with st.expander("Section 2 — Return Scatter", expanded=True):
-    dl1  = l1.diff().dropna()
-    dl2  = l2.diff().dropna()
-    scat = pd.concat([dl1.rename("leg1"), dl2.rename("leg2")], axis=1).dropna()
+st.subheader("Return Scatter")
+dl1  = l1.diff().dropna()
+dl2  = l2.diff().dropna()
+scat = pd.concat([dl1.rename("leg1"), dl2.rename("leg2")], axis=1).dropna()
 
-    if len(scat) < 10:
-        st.info("Not enough data in the selected date range.")
-    else:
-        coeffs           = np.polyfit(scat["leg1"], scat["leg2"], 1)
-        slope, intercept = coeffs
-        x_line           = np.linspace(scat["leg1"].min(), scat["leg1"].max(), 200)
-        y_line           = slope * x_line + intercept
-        r2               = scat["leg1"].corr(scat["leg2"]) ** 2
+if len(scat) < 10:
+    st.info("Not enough data in the selected date range.")
+else:
+    coeffs           = np.polyfit(scat["leg1"], scat["leg2"], 1)
+    slope, intercept = coeffs
+    x_line           = np.linspace(scat["leg1"].min(), scat["leg1"].max(), 200)
+    y_line           = slope * x_line + intercept
+    r2               = scat["leg1"].corr(scat["leg2"]) ** 2
 
-        cutoff   = 60
-        old_mask = scat.index < scat.index[-min(cutoff, len(scat))]
-        recent   = scat[~old_mask]
-        history  = scat[old_mask]
+    cutoff   = 60
+    old_mask = scat.index < scat.index[-min(cutoff, len(scat))]
+    recent   = scat[~old_mask]
+    history  = scat[old_mask]
 
-        fig_scat = go.Figure()
-        fig_scat.add_trace(go.Scatter(
-            x=history["leg1"], y=history["leg2"], mode="markers", name="History",
-            marker=dict(color=MUTED, size=4, opacity=0.45),
-            hovertemplate=f"Δ{leg1_label}: %{{x:.1f}}<br>Δ{leg2_label}: %{{y:.1f}}<extra></extra>",
-        ))
-        fig_scat.add_trace(go.Scatter(
-            x=recent["leg1"], y=recent["leg2"], mode="markers",
-            name=f"Last {min(cutoff, len(scat))}d",
-            marker=dict(color=TEAL, size=6, opacity=0.85, line=dict(color="white", width=0.5)),
-            hovertemplate=f"Δ{leg1_label}: %{{x:.1f}}<br>Δ{leg2_label}: %{{y:.1f}}<extra></extra>",
-        ))
-        fig_scat.add_trace(go.Scatter(
-            x=x_line, y=y_line, mode="lines", name="Regression",
-            line=dict(color=RED, width=1.5, dash="dash"),
-        ))
-        fig_scat.add_hline(y=0, line_color=GRID, line_width=1)
-        fig_scat.add_vline(x=0, line_color=GRID, line_width=1)
-        base_layout(
-            fig_scat,
-            title=f"Daily Return Scatter  —  R²={r2:.2f}",
-            xaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED),
-                       title=dict(text=f"Δ {leg1_label}", font=dict(color=MUTED, size=11))),
-            yaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED),
-                       title=dict(text=f"Δ {leg2_label}", font=dict(color=MUTED, size=11))),
-        )
-        st.plotly_chart(fig_scat, use_container_width=True)
+    fig_scat = go.Figure()
+    fig_scat.add_trace(go.Scatter(
+        x=history["leg1"], y=history["leg2"], mode="markers", name="History",
+        marker=dict(color=MUTED, size=4, opacity=0.45),
+        hovertemplate=f"Δ{leg1_label}: %{{x:.1f}}<br>Δ{leg2_label}: %{{y:.1f}}<extra></extra>",
+    ))
+    fig_scat.add_trace(go.Scatter(
+        x=recent["leg1"], y=recent["leg2"], mode="markers",
+        name=f"Last {min(cutoff, len(scat))}d",
+        marker=dict(color=TEAL, size=6, opacity=0.85, line=dict(color="white", width=0.5)),
+        hovertemplate=f"Δ{leg1_label}: %{{x:.1f}}<br>Δ{leg2_label}: %{{y:.1f}}<extra></extra>",
+    ))
+    fig_scat.add_trace(go.Scatter(
+        x=x_line, y=y_line, mode="lines", name="Regression",
+        line=dict(color=RED, width=1.5, dash="dash"),
+    ))
+    fig_scat.add_hline(y=0, line_color=GRID, line_width=1)
+    fig_scat.add_vline(x=0, line_color=GRID, line_width=1)
+    base_layout(
+        fig_scat,
+        title=f"Daily Return Scatter  —  R²={r2:.2f}",
+        xaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED),
+                   title=dict(text=f"Δ {leg1_label}", font=dict(color=MUTED, size=11))),
+        yaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED),
+                   title=dict(text=f"Δ {leg2_label}", font=dict(color=MUTED, size=11))),
+    )
+    st.plotly_chart(fig_scat, use_container_width=True)
+
+st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 3 — Ratio (KC/RC only)
 # ══════════════════════════════════════════════════════════════════════════════
 
 if not has_fx:
-    with st.expander("Section 3 — Ratio", expanded=True):
-        st.caption("Ratio of Arabica to Robusta price (both in $/MT). "
-                   "Roasters blend the two; extreme ratios historically mean-revert "
-                   "as substitution economics kick in.")
+    st.subheader("Ratio")
+    st.caption("Ratio of Arabica to Robusta price. "
+               "Roasters blend the two; extreme ratios historically mean-revert "
+               "as substitution economics kick in.")
 
-        ratio = l1 / l2
-        mu_r  = ratio.rolling(zscore_win).mean()
-        sig_r = ratio.rolling(zscore_win).std()
+    ratio = l1 / l2
+    mu_r  = ratio.rolling(zscore_win).mean()
+    sig_r = ratio.rolling(zscore_win).std()
 
-        fig_ratio = go.Figure()
-        fig_ratio.add_trace(go.Scatter(x=ratio.index, y=mu_r + sig_r,
-                                       line=dict(color=AMBER, width=1, dash="dash"), name="+1σ"))
-        fig_ratio.add_trace(go.Scatter(x=ratio.index, y=mu_r - sig_r,
-                                       line=dict(color=AMBER, width=1, dash="dash"),
-                                       name="-1σ", showlegend=False))
-        fig_ratio.add_trace(go.Scatter(x=ratio.index, y=mu_r,
-                                       line=dict(color=MUTED, width=1), name="Mean"))
-        fig_ratio.add_trace(go.Scatter(x=ratio.index, y=ratio,
-                                       line=dict(color=TEAL, width=2), name="KC/RC Ratio"))
-        base_layout(fig_ratio, title="KC/RC Price Ratio (Arabica/Robusta, $/MT)")
-        st.plotly_chart(fig_ratio, use_container_width=True)
+    fig_ratio = go.Figure()
+    fig_ratio.add_trace(go.Scatter(x=ratio.index, y=mu_r + sig_r,
+                                   line=dict(color=AMBER, width=1, dash="dash"), name="+1σ"))
+    fig_ratio.add_trace(go.Scatter(x=ratio.index, y=mu_r - sig_r,
+                                   line=dict(color=AMBER, width=1, dash="dash"),
+                                   name="-1σ", showlegend=False))
+    fig_ratio.add_trace(go.Scatter(x=ratio.index, y=mu_r,
+                                   line=dict(color=MUTED, width=1), name="Mean"))
+    fig_ratio.add_trace(go.Scatter(x=ratio.index, y=ratio,
+                                   line=dict(color=TEAL, width=2), name="KC/RC Ratio"))
+    base_layout(fig_ratio, title="KC/RC Price Ratio (Arabica/Robusta)")
+    st.plotly_chart(fig_ratio, use_container_width=True)
 
 st.caption("ICEBREAKER ARB  —  Data: LSEG (interim) front-month (1st/2nd) + GBP/USD")
