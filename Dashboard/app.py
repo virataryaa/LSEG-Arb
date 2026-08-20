@@ -267,6 +267,25 @@ else:
         x=x_line, y=y_line, mode="lines", name="Regression",
         line=dict(color=RED, width=1.5, dash="dash"),
     ))
+
+    # — Callouts for the most recent few sessions —
+    callout_n = 5
+    latest    = scat.iloc[-callout_n:]
+    fig_scat.add_trace(go.Scatter(
+        x=latest["leg1"], y=latest["leg2"], mode="markers",
+        name=f"Last {callout_n} sessions",
+        marker=dict(color=RED, size=10, symbol="circle-open", line=dict(color=RED, width=2)),
+        hovertemplate=f"Δ{leg1_label}: %{{x:.1f}}<br>Δ{leg2_label}: %{{y:.1f}}<extra></extra>",
+    ))
+    for i, (dt, row) in enumerate(latest.iterrows()):
+        fig_scat.add_annotation(
+            x=row["leg1"], y=row["leg2"], text=dt.strftime("%d %b"),
+            showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1, arrowcolor=RED,
+            ax=0, ay=-28 - (i % 2) * 16,
+            font=dict(size=10, color=FONT),
+            bgcolor="rgba(255,255,255,0.85)", bordercolor=RED, borderwidth=1, borderpad=2,
+        )
+
     fig_scat.add_hline(y=0, line_color=GRID, line_width=1)
     fig_scat.add_vline(x=0, line_color=GRID, line_width=1)
     base_layout(
