@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableDelayedExpansion
-set LOG="C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\Interim_Migration\Arb\Automator\run_log.txt"
+set LOG="C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\LSEG\Arb\Automator\run_log.txt"
 set INGEST_STATUS=ok
 set GIT_STATUS=skipped
 
@@ -13,13 +13,13 @@ echo ============================= >> %LOG%
 echo Run started: %date% %time% >> %LOG%
 echo ============================= >> %LOG%
 
-:: No Rollex sync step here — the simplified dashboard (KPI cards, Rollex
+:: No Rollex sync step here - the simplified dashboard (KPI cards, Rollex
 :: price source, Advanced Analytics all removed) doesn't use arb_*.parquet
 :: at all anymore, only front_*.parquet and fx_gbp.parquet.
 
-:: Step 1 — Front-month and 2nd-month prices from LSEG
+:: Step 1 - Front-month and 2nd-month prices from LSEG
 echo [1] Running ingest_front_lseg.py... >> %LOG%
-python "C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\Interim_Migration\Arb\Code\ingest_front_lseg.py" >> %LOG% 2>&1
+python "C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\LSEG\Arb\Code\ingest_front_lseg.py" >> %LOG% 2>&1
 
 if %ERRORLEVEL% NEQ 0 (
     echo ERROR: ingest_front_lseg.py failed >> %LOG%
@@ -27,9 +27,9 @@ if %ERRORLEVEL% NEQ 0 (
     goto notify
 )
 
-:: Step 2 — GBP/USD spot from LSEG
+:: Step 2 - GBP/USD spot from LSEG
 echo [2] Running ingest_gbp_lseg.py... >> %LOG%
-python "C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\Interim_Migration\Arb\Code\ingest_gbp_lseg.py" >> %LOG% 2>&1
+python "C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\LSEG\Arb\Code\ingest_gbp_lseg.py" >> %LOG% 2>&1
 
 if %ERRORLEVEL% NEQ 0 (
     echo ERROR: ingest_gbp_lseg.py failed >> %LOG%
@@ -37,9 +37,9 @@ if %ERRORLEVEL% NEQ 0 (
     goto notify
 )
 
-:: Step 3 — Push updated parquets to GitHub
+:: Step 3 - Push updated parquets to GitHub
 echo [3] Pushing to GitHub... >> %LOG%
-cd /d "C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\Interim_Migration\Arb"
+cd /d "C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\LSEG\Arb"
 git add Database\front_KC.parquet Database\front_RC.parquet Database\front_CC.parquet Database\front_LCC.parquet Database\fx_gbp.parquet >> %LOG% 2>&1
 git diff --cached --quiet
 if %ERRORLEVEL% NEQ 0 (
@@ -59,6 +59,6 @@ if %ERRORLEVEL% NEQ 0 (
 
 :notify
 echo [4] Sending email notification... >> %LOG%
-python "C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\Interim_Migration\Arb\Automator\notify.py" %INGEST_STATUS% %GIT_STATUS% >> %LOG% 2>&1
+python "C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\LSEG\Arb\Automator\notify.py" %INGEST_STATUS% %GIT_STATUS% >> %LOG% 2>&1
 
 echo Run finished: %date% %time% >> %LOG%

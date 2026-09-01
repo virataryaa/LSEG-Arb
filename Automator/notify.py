@@ -11,7 +11,7 @@ import pandas as pd
 from pathlib import Path
 
 TO_EMAIL = "virat.arya@etgworld.com"
-DB_DIR   = Path(r"C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\Interim_Migration\Arb\Database")
+DB_DIR   = Path(r"C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\LSEG\Arb\Database")
 
 KC_FACTOR = 22.0462  # c/lbs -> $/MT
 
@@ -81,7 +81,7 @@ def send_outlook_email(subject: str, body: str):
 
 ok  = status == "ok"
 tag = "[OK]" if ok else "[ERROR]"
-subject = f"{tag} Interim_Migration-Arb (LSEG) — {today}"
+subject = f"{tag} LSEG-Arb — {today}"
 
 git_line = {
     "pushed":  "GitHub  : Pushed successfully",
@@ -89,7 +89,7 @@ git_line = {
     "failed":  "GitHub  : PUSH FAILED",
 }.get(git_status, f"GitHub  : {git_status}")
 
-body = f"""Interim_Migration Arb (LSEG) — Daily Update
+body = f"""LSEG Arb — Daily Update
 Run time : {run_dt}
 Status   : {"OK" if ok else "ERROR — ingest failed, check run_log.txt"}
 {git_line}
@@ -99,7 +99,7 @@ ARB DATA SUMMARY
 {"=" * 60}
 {spread_summary()}
 {"=" * 60}
-Log: C:\\Users\\virat.arya\\ETG\\SoftsDatabase - Documents\\Database\\Hardmine\\Interim_Migration\\Arb\\Automator\\run_log.txt
+Log: C:\\Users\\virat.arya\\ETG\\SoftsDatabase - Documents\\Database\\Hardmine\\LSEG\\Arb\\Automator\\run_log.txt
 """
 
 print(body)
