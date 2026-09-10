@@ -139,18 +139,42 @@ st.title("ARB Monitor")
 st.caption(pair_title)
 st.markdown("**Date range**")
 
-d_start, d_end = st.slider(
+def _dates_to_slider() -> None:
+    """Push a manual Start/End edit back into the slider."""
+    s, e = st.session_state.ds, st.session_state.de
+    if s > e:
+        s, e = e, s
+    st.session_state.rng = (s, e)
+
+# Single source of truth for the range; the slider owns "rng", the two date
+# pickers mirror it. Keyed widgets ignore `value=` after first render, so the
+# mirroring has to go through session state or the slider gets overruled.
+if "rng" not in st.session_state:
+    st.session_state.rng = (date_min, date_max)
+
+s0, e0 = st.session_state.rng
+s0 = min(max(s0, date_min), date_max)
+e0 = min(max(e0, date_min), date_max)
+if s0 > e0:
+    s0, e0 = e0, s0
+st.session_state.rng = (s0, e0)
+st.session_state.ds  = s0
+st.session_state.de  = e0
+
+st.slider(
     "range", min_value=date_min, max_value=date_max,
-    value=(date_min, date_max), format="DD MMM YYYY",
+    format="DD MMM YYYY", key="rng",
     label_visibility="collapsed",
 )
 cal_l, cal_r, _ = st.columns([1, 1, 4])
 with cal_l:
-    d_start = st.date_input("Start", value=d_start, min_value=date_min,
-                             max_value=date_max, key="ds")
+    st.date_input("Start", min_value=date_min, max_value=date_max,
+                  key="ds", on_change=_dates_to_slider)
 with cal_r:
-    d_end   = st.date_input("End",   value=d_end,   min_value=date_min,
-                             max_value=date_max, key="de")
+    st.date_input("End",   min_value=date_min, max_value=date_max,
+                  key="de", on_change=_dates_to_slider)
+
+d_start, d_end = st.session_state.rng
 
 spread  = spread.loc[str(d_start): str(d_end)]
 gbp_raw = gbp_raw.loc[str(d_start): str(d_end)]
