@@ -88,7 +88,7 @@ with st.sidebar:
     if pair_key == "KCRC":
         st.divider()
         st.markdown("**Units**")
-        unit_choice = st.radio("Units", ["$/MT", "¢/lb"], index=0, label_visibility="collapsed")
+        unit_choice = st.radio("Units", ["$/MT", "¢/lb"], index=1, label_visibility="collapsed")
     else:
         unit_choice = "$/MT"
 
