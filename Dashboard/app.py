@@ -136,9 +136,15 @@ else:
 date_min = spread.index.min().date()
 date_max = spread.index.max().date()
 
-st.title("ARB Monitor")
-st.caption(pair_title)
-st.markdown("**Date range**")
+st.markdown(
+    "<style>"
+    ".block-container{padding-top:1.2rem;padding-bottom:1rem}"
+    "header[data-testid='stHeader']{height:2rem}"
+    "</style>"
+    f"<div style='font-size:0.8rem;color:{MUTED};letter-spacing:0.04em;"
+    f"text-transform:uppercase'>ARB Monitor &nbsp;·&nbsp; {pair_title}</div>",
+    unsafe_allow_html=True,
+)
 
 def _dates_to_slider() -> None:
     """Push a manual Start/End edit back into the slider."""
@@ -162,25 +168,26 @@ st.session_state.rng = (s0, e0)
 st.session_state.ds  = s0
 st.session_state.de  = e0
 
-st.slider(
-    "range", min_value=date_min, max_value=date_max,
-    format="DD MMM YYYY", key="rng",
-    label_visibility="collapsed",
-)
-cal_l, cal_r, _ = st.columns([1, 1, 4])
-with cal_l:
-    st.date_input("Start", min_value=date_min, max_value=date_max,
-                  key="ds", on_change=_dates_to_slider)
-with cal_r:
-    st.date_input("End",   min_value=date_min, max_value=date_max,
-                  key="de", on_change=_dates_to_slider)
+with st.sidebar:
+    st.divider()
+    st.markdown("**Date range**")
+    st.slider(
+        "range", min_value=date_min, max_value=date_max,
+        format="DD MMM YYYY", key="rng",
+        label_visibility="collapsed",
+    )
+    cal_l, cal_r = st.columns(2)
+    with cal_l:
+        st.date_input("Start", min_value=date_min, max_value=date_max,
+                      key="ds", on_change=_dates_to_slider)
+    with cal_r:
+        st.date_input("End",   min_value=date_min, max_value=date_max,
+                      key="de", on_change=_dates_to_slider)
 
 d_start, d_end = st.session_state.rng
 
 spread  = spread.loc[str(d_start): str(d_end)]
 gbp_raw = gbp_raw.loc[str(d_start): str(d_end)]
-
-st.divider()
 
 # ── Compute ───────────────────────────────────────────────────────────────────
 
@@ -202,10 +209,6 @@ else:
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — Spread Monitor
 # ══════════════════════════════════════════════════════════════════════════════
-
-st.subheader("Spread Monitor")
-st.caption("Spread level with rolling mean and 1/2 standard deviation bands. "
-           "The z-score panel shows where the spread sits relative to its own history.")
 
 # — Spread + bands —
 fig_sp = go.Figure()
