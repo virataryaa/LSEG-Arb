@@ -52,14 +52,21 @@ ROOTS = {
 
 def _fetch_leg(ld, ric: str, start: str, end: str) -> pd.Series:
     try:
-        df = ld.get_history(universe=[ric], fields=["TRDPRC_1"], start=start, end=end,
+        # SETTLE, not TRDPRC_1: the front contract goes untraded on many days
+        # near expiry (KCc1/LRCc1 came back NA), which left px1 empty and
+        # truncated the dashboard. Fall back to last trade only where no settle.
+        df = ld.get_history(universe=[ric], fields=["SETTLE", "TRDPRC_1"], start=start, end=end,
                              interval="daily", count=10000)
         if df is None or df.empty:
             log.warning("No data for %s", ric)
             return pd.Series(dtype=float)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [c[0] for c in df.columns]
-        s = df.iloc[:, 0].dropna()
+        if "SETTLE" in df.columns:
+            s = df["SETTLE"].fillna(df["TRDPRC_1"]) if "TRDPRC_1" in df.columns else df["SETTLE"]
+        else:
+            s = df["TRDPRC_1"]
+        s = s.dropna()
         s.index = pd.to_datetime(s.index).normalize()
         return s
     except Exception as e:
