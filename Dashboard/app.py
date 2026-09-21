@@ -51,7 +51,7 @@ def base_layout(fig, **kw):
 # ── Data ──────────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=3600)
-def load_all():
+def load_all(mtimes):  # mtimes keys the cache so a new parquet push invalidates it
     gbp = pd.read_parquet(DB / "fx_gbp.parquet")["GBP_USD"]
 
     # Actual front-month prices (1st/2nd month, no roll adjustment)
@@ -62,7 +62,8 @@ def load_all():
 
     return gbp, front
 
-gbp_raw, front = load_all()
+_mtimes = tuple(p.stat().st_mtime_ns if p.exists() else 0 for p in sorted(DB.glob("*.parquet")))
+gbp_raw, front = load_all(_mtimes)
 
 front_available = all(front[n] is not None for n in ["KC", "RC", "CC", "LCC"])
 
