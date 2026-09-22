@@ -37,10 +37,22 @@ if %ERRORLEVEL% NEQ 0 (
     goto notify
 )
 
-:: Step 3 - Push updated parquets to GitHub
-echo [3] Pushing to GitHub... >> %LOG%
+:: Step 3 - Per-contract price sync (copies from Futures/Database for the
+:: Contract Explorer section - Futures/Database's own pipeline refreshes it)
+echo [3] Running ingest_contracts.py... >> %LOG%
+python "C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\LSEG\Arb\Code\ingest_contracts.py" >> %LOG% 2>&1
+
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: ingest_contracts.py failed >> %LOG%
+    set INGEST_STATUS=error
+    goto notify
+)
+
+:: Step 4 - Push updated parquets to GitHub
+echo [4] Pushing to GitHub... >> %LOG%
 cd /d "C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\LSEG\Arb"
 git add Database\front_KC.parquet Database\front_RC.parquet Database\front_CC.parquet Database\front_LCC.parquet Database\fx_gbp.parquet >> %LOG% 2>&1
+git add Database\kc_futures.parquet Database\rc_futures.parquet Database\cc_futures.parquet Database\lcc_futures.parquet >> %LOG% 2>&1
 git diff --cached --quiet
 if %ERRORLEVEL% NEQ 0 (
     git commit -m "Auto update: Arb (LSEG) %date%" >> %LOG% 2>&1
@@ -58,7 +70,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 :notify
-echo [4] Sending email notification... >> %LOG%
+echo [5] Sending email notification... >> %LOG%
 python "C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\LSEG\Arb\Automator\notify.py" %INGEST_STATUS% %GIT_STATUS% >> %LOG% 2>&1
 
 echo Run finished: %date% %time% >> %LOG%

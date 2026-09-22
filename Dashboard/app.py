@@ -9,6 +9,7 @@ warnings.filterwarnings("ignore")
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.express as px
 import streamlit as st
 from pathlib import Path
 
@@ -19,6 +20,20 @@ st.set_page_config(page_title="ARB Monitor", layout="wide")
 DB = Path(__file__).parent.parent / "Database"
 
 KC_FACTOR = 22.0462   # ¢/lbs  →  $/MT
+
+# Contract-pairing convention for the Contract Explorer section, mirroring
+# the CFARB/COCARB month map in Non Fundamental/Seasonality/Code/market_configs.py
+# (KC and RC/LRC don't share delivery months, so an anchor month picks a
+# matched pair — e.g. anchor "ZX" = KC Z vs RC X same year, "ZF" = KC Z vs RC F next year).
+KCRC_MONTH_MAP = {   # anchor -> (KC month, RC month, RC year offset)
+    "H":  ("H", "H", 0),
+    "K":  ("K", "K", 0),
+    "N":  ("N", "N", 0),
+    "U":  ("U", "U", 0),
+    "ZX": ("Z", "X", 0),
+    "ZF": ("Z", "F", 1),
+}
+CCLCC_MONTH_MAP = {mc: (mc, mc, 0) for mc in ["H", "K", "N", "U", "Z"]}  # CC/LCC share month codes
 
 # ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -64,12 +79,39 @@ def load_all(mtimes):  # mtimes keys the cache so a new parquet push invalidates
 
 _mtimes = tuple(p.stat().st_mtime_ns if p.exists() else 0 for p in sorted(DB.glob("*.parquet")))
 gbp_raw, front = load_all(_mtimes)
+gbp_full = gbp_raw.copy()  # unsliced by date range — Contract Explorer needs historical vintages too
 
 front_available = all(front[n] is not None for n in ["KC", "RC", "CC", "LCC"])
 
 if not front_available:
     st.error("Front-month data not yet ingested — run ingest_front.py first.")
     st.stop()
+
+# ── Per-contract data (for Contract Explorer) ──────────────────────────────────
+
+CONTRACT_FILES = {"KC": "kc_futures.parquet", "RC": "rc_futures.parquet",
+                   "CC": "cc_futures.parquet", "LCC": "lcc_futures.parquet"}
+
+@st.cache_data(ttl=3600)
+def load_contracts(mtimes):
+    data = {}
+    for name, fname in CONTRACT_FILES.items():
+        path = DB / fname
+        data[name] = pd.read_parquet(path) if path.exists() else None
+    return data
+
+_contract_mtimes = tuple((DB / f).stat().st_mtime_ns if (DB / f).exists() else 0
+                         for f in CONTRACT_FILES.values())
+contract_db = load_contracts(_contract_mtimes)
+contract_db_available = all(contract_db[n] is not None for n in CONTRACT_FILES)
+
+def contract_series(df: pd.DataFrame, month: str, year: int) -> pd.Series:
+    sub = df[(df["month"] == month) & (df["year"] == year)].sort_values("Date")
+    return sub.set_index("Date")["settlement"].dropna()
+
+def available_vintages(df: pd.DataFrame, month: str, min_days: int = 20) -> list[int]:
+    counts = df[df["month"] == month].groupby("year").size()
+    return sorted(int(y) for y, n in counts.items() if n >= min_days)
 
 # ── Analytics helpers ─────────────────────────────────────────────────────────
 
@@ -102,6 +144,20 @@ with st.sidebar:
     st.divider()
     st.markdown("**Windows**")
     zscore_win = st.slider("Z-score lookback (days)", 60, 504, 252, step=21)
+
+    month_map = KCRC_MONTH_MAP if pair_key == "KCRC" else CCLCC_MONTH_MAP
+    anchor_month, vintage_years = None, []
+    if contract_db_available:
+        st.divider()
+        st.markdown("**Contract Explorer**")
+        anchor_month = st.radio("Anchor month", list(month_map.keys()),
+                                horizontal=True, key=f"anchor_month_{pair_key}")
+        _m1, _m2, _yoff2 = month_map[anchor_month]
+        _db1 = contract_db["KC"] if pair_key == "KCRC" else contract_db["CC"]
+        _vintages = available_vintages(_db1, _m1)
+        _default_vint = _vintages[-3:] if len(_vintages) >= 3 else _vintages
+        vintage_years = st.multiselect("Vintage year(s)", options=_vintages,
+                                       default=_default_vint, key=f"vintage_years_{pair_key}_{anchor_month}")
 
 # ── Build spread ──────────────────────────────────────────────────────────────
 
@@ -354,5 +410,84 @@ if not has_fx:
                                    line=dict(color=TEAL, width=2), name="KC/RC Ratio"))
     base_layout(fig_ratio, title="KC/RC Price Ratio (Arabica/Robusta)")
     st.plotly_chart(fig_ratio, use_container_width=True)
+
+st.divider()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 4 — Contract Explorer (specific-vintage time series)
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.subheader("Contract Explorer")
+
+if not contract_db_available:
+    st.info("Per-contract data not yet synced — run ingest_contracts.py first.")
+elif not vintage_years:
+    st.info("Select at least one vintage year in the sidebar.")
+else:
+    m1, m2, yoff2 = month_map[anchor_month]
+    leg1_name, leg2_name = ("KC", "RC") if pair_key == "KCRC" else ("CC", "LCC")
+    db1 = contract_db["KC"] if pair_key == "KCRC" else contract_db["CC"]
+    db2 = contract_db["RC"] if pair_key == "KCRC" else contract_db["LCC"]
+
+    st.caption(
+        f"Anchor month **{anchor_month}** → {leg1_name} {m1} vs {leg2_name} {m2}"
+        + (f" (+{yoff2}y)" if yoff2 else "")
+        + " — real calendar dates for the specific contract vintage(s) selected, "
+          "not the rolled front-month series used above."
+    )
+
+    YEAR_COLORS = px.colors.qualitative.Dark24
+
+    fig_legs2   = go.Figure()
+    fig_spread2 = go.Figure()
+    rows        = []
+
+    for i, yr in enumerate(sorted(vintage_years)):
+        y2 = yr + yoff2
+        s1 = contract_series(db1, m1, yr)
+        s2 = contract_series(db2, m2, y2)
+        if s1.empty or s2.empty:
+            continue
+
+        if pair_key == "KCRC":
+            s1c = s1 * KC_FACTOR
+            s2c = s2.copy()
+            if unit_choice == "¢/lb":
+                s1c, s2c = s1c / KC_FACTOR, s2c / KC_FACTOR
+        else:
+            s1c = s1.copy()
+            s2c = (s2 * gbp_full.reindex(s2.index).ffill()).dropna()
+
+        spr   = (s1c - s2c).dropna()
+        color = YEAR_COLORS[i % len(YEAR_COLORS)]
+        tag1  = f"{leg1_name}{m1}{str(yr)[-2:]}"
+        tag2  = f"{leg2_name}{m2}{str(y2)[-2:]}"
+
+        fig_legs2.add_trace(go.Scatter(x=s1c.index, y=s1c, name=tag1,
+                                       line=dict(color=color, width=2)))
+        fig_legs2.add_trace(go.Scatter(x=s2c.index, y=s2c, name=tag2,
+                                       line=dict(color=color, width=1.5, dash="dot")))
+        fig_spread2.add_trace(go.Scatter(x=spr.index, y=spr, name=str(yr),
+                                         line=dict(color=color, width=2)))
+
+        rows.append({
+            "Vintage":     yr,
+            f"{leg1_name} leg": tag1,
+            f"{leg2_name} leg": tag2,
+            "First trade": s1c.index.min().date(),
+            "Last trade":  min(s1c.index.max(), s2c.index.max()).date(),
+        })
+
+    if not rows:
+        st.info("No overlapping data for the selected vintage(s).")
+    else:
+        unit_lbl = unit_choice if pair_key == "KCRC" else "$/MT"
+        base_layout(fig_legs2, title=f"Individual Legs by Vintage ({unit_lbl})")
+        st.plotly_chart(fig_legs2, use_container_width=True)
+
+        base_layout(fig_spread2, title=f"Spread by Vintage — anchor {anchor_month} ({unit_lbl})")
+        st.plotly_chart(fig_spread2, use_container_width=True)
+
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
 st.caption("ICEBREAKER ARB  —  Data: LSEG (interim) front-month (1st/2nd) + GBP/USD")
