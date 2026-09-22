@@ -473,9 +473,7 @@ else:
             st.caption(
                 f"Anchor month **{anchor_month}** → {leg1_name} {m1} vs {leg2_name} {m2}"
                 + (f" (+{yoff2}y)" if yoff2 else "")
-                + " — one continuous stitched series: each point uses whichever vintage of that "
-                  "month is nearest its own expiry, rolling to the next vintage the day after "
-                  "expiry, so this is a real calendar-date time series, not a DTE overlay."
+                + " — one continuous line. It moves to the next contract right after each one expires."
             )
 
             leg1 = merged["leg1"]
