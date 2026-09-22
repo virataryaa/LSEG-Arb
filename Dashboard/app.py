@@ -124,15 +124,15 @@ def zscore(spread: pd.Series, window: int) -> pd.Series:
 
 st.markdown(
     "<style>"
-    ".block-container{padding-top:1.2rem;padding-bottom:1rem}"
-    "header[data-testid='stHeader']{height:2rem}"
+    ".block-container{padding-top:3.5rem;padding-bottom:1rem}"
+    "div[data-testid='stSegmentedControl'] button{font-size:1rem;padding:0.5rem 1.5rem}"
     "</style>",
     unsafe_allow_html=True,
 )
 
 page = st.segmented_control(
     "View", ["Spread Monitor", "Contract Explorer"],
-    default="Spread Monitor", key="page", label_visibility="collapsed",
+    default="Spread Monitor", key="page",
 )
 page = page or "Spread Monitor"
 
@@ -425,7 +425,7 @@ else:
         unsafe_allow_html=True,
     )
 
-    anchor_month, vintage_years = None, []
+    anchor_month, vintage_years, lookback_days = None, [], 260
     with st.sidebar:
         if contract_db_available:
             st.divider()
@@ -438,6 +438,13 @@ else:
             _default_vint = _vintages[-3:] if len(_vintages) >= 3 else _vintages
             vintage_years = st.multiselect("Vintage year(s)", options=_vintages,
                                            default=_default_vint, key=f"vintage_years_{pair_key}_{anchor_month}")
+            lookback_days = st.slider("Lookback before expiry (trading days)", 60, 750, 260, step=20,
+                                      key=f"lookback_{pair_key}",
+                                      help="These contracts trade for ~3 years before expiry, so "
+                                           "plotting full histories for several vintages makes them "
+                                           "pile on top of each other on a real calendar axis. This "
+                                           "trims each vintage to only its final N trading days, so "
+                                           "consecutive vintages sit side by side instead of overlapping.")
 
     st.subheader("Contract Explorer")
 
@@ -454,7 +461,7 @@ else:
         st.caption(
             f"Anchor month **{anchor_month}** → {leg1_name} {m1} vs {leg2_name} {m2}"
             + (f" (+{yoff2}y)" if yoff2 else "")
-            + " — real calendar dates for the specific contract vintage(s) selected, "
+            + f" — last {lookback_days} trading days of each vintage's real calendar dates, "
               "not the rolled front-month series in the Spread Monitor tab."
         )
 
@@ -480,7 +487,9 @@ else:
                 s1c = s1.copy()
                 s2c = (s2 * gbp_full.reindex(s2.index).ffill()).dropna()
 
-            spr   = (s1c - s2c).dropna()
+            s1c = s1c.tail(lookback_days)
+            s2c = s2c.tail(lookback_days)
+            spr = (s1c - s2c).dropna()
             color = YEAR_COLORS[i % len(YEAR_COLORS)]
             tag1  = f"{leg1_name}{m1}{str(yr)[-2:]}"
             tag2  = f"{leg2_name}{m2}{str(y2)[-2:]}"
