@@ -9,7 +9,6 @@ warnings.filterwarnings("ignore")
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 import streamlit as st
 from pathlib import Path
 
@@ -105,13 +104,33 @@ _contract_mtimes = tuple((DB / f).stat().st_mtime_ns if (DB / f).exists() else 0
 contract_db = load_contracts(_contract_mtimes)
 contract_db_available = all(contract_db[n] is not None for n in CONTRACT_FILES)
 
-def contract_series(df: pd.DataFrame, month: str, year: int) -> pd.Series:
-    sub = df[(df["month"] == month) & (df["year"] == year)].sort_values("Date")
-    return sub.set_index("Date")["settlement"].dropna()
+def continuous_leg(df: pd.DataFrame, month: str) -> pd.DataFrame:
+    """Continuous single-leg series for one month code: at each date, use
+    whichever vintage is nearest its own expiry (smallest LTD). Since an
+    older vintage always has a smaller LTD than the next one while it's
+    still trading, this picks that vintage for its entire life and only
+    switches to the next vintage the day after the current one's last
+    trading day — i.e. a stitched, non-overlapping roll for that specific
+    contract month, analogous to a front-month series but locked to `month`."""
+    sub = df[df["month"] == month].dropna(subset=["LTD", "settlement"])
+    if sub.empty:
+        return pd.DataFrame(columns=["year", "settlement"])
+    idx = sub.groupby("Date")["LTD"].idxmin()
+    return sub.loc[idx, ["Date", "year", "settlement"]].sort_values("Date").set_index("Date")
 
-def available_vintages(df: pd.DataFrame, month: str, min_days: int = 20) -> list[int]:
-    counts = df[df["month"] == month].groupby("year").size()
-    return sorted(int(y) for y, n in counts.items() if n >= min_days)
+def continuous_pair(db1: pd.DataFrame, m1: str, db2: pd.DataFrame, m2: str, yoff2: int) -> pd.DataFrame:
+    """Joins two continuous legs so leg2 always uses the vintage matched to
+    leg1's active vintage (year1 + yoff2), not its own independent roll."""
+    front1 = continuous_leg(db1, m1)
+    if front1.empty:
+        return pd.DataFrame(columns=["year1", "leg1", "year2", "leg2"])
+    front1 = front1.rename(columns={"year": "year1", "settlement": "leg1"})
+    front1["year2"] = front1["year1"] + yoff2
+
+    sub2 = db2[db2["month"] == m2][["Date", "year", "settlement"]].rename(
+        columns={"year": "year2", "settlement": "leg2"})
+
+    return front1.reset_index().merge(sub2, on=["Date", "year2"], how="inner").set_index("Date").sort_index()
 
 # ── Analytics helpers ─────────────────────────────────────────────────────────
 
@@ -425,100 +444,111 @@ else:
         unsafe_allow_html=True,
     )
 
-    anchor_month, vintage_years, lookback_days = None, [], 260
+    anchor_month = None
     with st.sidebar:
         if contract_db_available:
             st.divider()
             st.markdown("**Contract Explorer**")
             anchor_month = st.radio("Anchor month", list(month_map.keys()),
                                     horizontal=True, key=f"anchor_month_{pair_key}")
-            _m1, _m2, _yoff2 = month_map[anchor_month]
-            _db1 = contract_db["KC"] if pair_key == "KCRC" else contract_db["CC"]
-            _vintages = available_vintages(_db1, _m1)
-            _default_vint = _vintages[-3:] if len(_vintages) >= 3 else _vintages
-            vintage_years = st.multiselect("Vintage year(s)", options=_vintages,
-                                           default=_default_vint, key=f"vintage_years_{pair_key}_{anchor_month}")
-            lookback_days = st.slider("Lookback before expiry (trading days)", 60, 750, 260, step=20,
-                                      key=f"lookback_{pair_key}",
-                                      help="These contracts trade for ~3 years before expiry, so "
-                                           "plotting full histories for several vintages makes them "
-                                           "pile on top of each other on a real calendar axis. This "
-                                           "trims each vintage to only its final N trading days, so "
-                                           "consecutive vintages sit side by side instead of overlapping.")
+            st.divider()
+            st.markdown("**Windows**")
+            zscore_win2 = st.slider("Z-score lookback (days)", 60, 504, 252, step=21, key="zscore_win2")
 
     st.subheader("Contract Explorer")
 
     if not contract_db_available:
         st.info("Per-contract data not yet synced — run ingest_contracts.py first.")
-    elif not vintage_years:
-        st.info("Select at least one vintage year in the sidebar.")
     else:
         m1, m2, yoff2 = month_map[anchor_month]
         leg1_name, leg2_name = ("KC", "RC") if pair_key == "KCRC" else ("CC", "LCC")
         db1 = contract_db["KC"] if pair_key == "KCRC" else contract_db["CC"]
         db2 = contract_db["RC"] if pair_key == "KCRC" else contract_db["LCC"]
 
-        st.caption(
-            f"Anchor month **{anchor_month}** → {leg1_name} {m1} vs {leg2_name} {m2}"
-            + (f" (+{yoff2}y)" if yoff2 else "")
-            + f" — last {lookback_days} trading days of each vintage's real calendar dates, "
-              "not the rolled front-month series in the Spread Monitor tab."
-        )
+        merged = continuous_pair(db1, m1, db2, m2, yoff2)
 
-        YEAR_COLORS = px.colors.qualitative.Dark24
-
-        fig_legs2   = go.Figure()
-        fig_spread2 = go.Figure()
-        rows        = []
-
-        for i, yr in enumerate(sorted(vintage_years)):
-            y2 = yr + yoff2
-            s1 = contract_series(db1, m1, yr)
-            s2 = contract_series(db2, m2, y2)
-            if s1.empty or s2.empty:
-                continue
-
-            if pair_key == "KCRC":
-                s1c = s1 * KC_FACTOR
-                s2c = s2.copy()
-                if unit_choice == "¢/lb":
-                    s1c, s2c = s1c / KC_FACTOR, s2c / KC_FACTOR
-            else:
-                s1c = s1.copy()
-                s2c = (s2 * gbp_full.reindex(s2.index).ffill()).dropna()
-
-            s1c = s1c.tail(lookback_days)
-            s2c = s2c.tail(lookback_days)
-            spr = (s1c - s2c).dropna()
-            color = YEAR_COLORS[i % len(YEAR_COLORS)]
-            tag1  = f"{leg1_name}{m1}{str(yr)[-2:]}"
-            tag2  = f"{leg2_name}{m2}{str(y2)[-2:]}"
-
-            fig_legs2.add_trace(go.Scatter(x=s1c.index, y=s1c, name=tag1,
-                                           line=dict(color=color, width=2)))
-            fig_legs2.add_trace(go.Scatter(x=s2c.index, y=s2c, name=tag2,
-                                           line=dict(color=color, width=1.5, dash="dot")))
-            fig_spread2.add_trace(go.Scatter(x=spr.index, y=spr, name=str(yr),
-                                             line=dict(color=color, width=2)))
-
-            rows.append({
-                "Vintage":     yr,
-                f"{leg1_name} leg": tag1,
-                f"{leg2_name} leg": tag2,
-                "First trade": s1c.index.min().date(),
-                "Last trade":  min(s1c.index.max(), s2c.index.max()).date(),
-            })
-
-        if not rows:
-            st.info("No overlapping data for the selected vintage(s).")
+        if merged.empty:
+            st.info("No overlapping data for this anchor month.")
         else:
+            st.caption(
+                f"Anchor month **{anchor_month}** → {leg1_name} {m1} vs {leg2_name} {m2}"
+                + (f" (+{yoff2}y)" if yoff2 else "")
+                + " — one continuous stitched series: each point uses whichever vintage of that "
+                  "month is nearest its own expiry, rolling to the next vintage the day after "
+                  "expiry, so this is a real calendar-date time series, not a DTE overlay."
+            )
+
+            leg1 = merged["leg1"]
+            if pair_key == "KCRC":
+                leg1c = leg1 * KC_FACTOR
+                leg2c = merged["leg2"].copy()
+                if unit_choice == "¢/lb":
+                    leg1c, leg2c = leg1c / KC_FACTOR, leg2c / KC_FACTOR
+            else:
+                leg2c = (merged["leg2"] * gbp_full.reindex(merged.index).ffill()).dropna()
+                leg1c = leg1.reindex(leg2c.index)
+
+            spr = (leg1c - leg2c).dropna()
             unit_lbl = unit_choice if pair_key == "KCRC" else "$/MT"
-            base_layout(fig_legs2, title=f"Individual Legs by Vintage ({unit_lbl})")
+
+            tag1 = leg1_name + m1 + merged["year1"].astype(str).str[-2:]
+            tag2 = leg2_name + m2 + merged["year2"].astype(str).str[-2:]
+
+            mu2  = spr.rolling(zscore_win2).mean()
+            sig2 = spr.rolling(zscore_win2).std()
+
+            # — Spread + bands —
+            fig_sp2 = go.Figure()
+            fig_sp2.add_trace(go.Scatter(x=spr.index, y=mu2 + 2*sig2, name="+2σ",
+                                         line=dict(color=RED, width=1, dash="dot")))
+            fig_sp2.add_trace(go.Scatter(x=spr.index, y=mu2 + sig2, name="+1σ",
+                                         line=dict(color=AMBER, width=1, dash="dash")))
+            fig_sp2.add_trace(go.Scatter(x=spr.index, y=mu2, name="Mean",
+                                         line=dict(color=MUTED, width=1.5)))
+            fig_sp2.add_trace(go.Scatter(x=spr.index, y=mu2 - sig2, name="-1σ",
+                                         line=dict(color=AMBER, width=1, dash="dash"), showlegend=False))
+            fig_sp2.add_trace(go.Scatter(x=spr.index, y=mu2 - 2*sig2, name="-2σ",
+                                         line=dict(color=RED, width=1, dash="dot"), showlegend=False))
+            fig_sp2.add_trace(go.Scatter(x=spr.index, y=spr, name="Spread",
+                                         line=dict(color=TEAL, width=2)))
+            base_layout(fig_sp2, title=f"Spread — anchor {anchor_month} ({unit_lbl})")
+            st.plotly_chart(fig_sp2, use_container_width=True)
+
+            # — Z-score —
+            z2 = zscore(spr, zscore_win2)
+            fig_z2 = go.Figure()
+            fig_z2.add_trace(go.Scatter(x=z2.index, y=z2, name="Z-score", line=dict(color=TEAL, width=1.5)))
+            fig_z2.add_hline(y=0, line_color=MUTED, line_width=1)
+            base_layout(fig_z2, title=f"Z-Score  ({zscore_win2}d rolling)",
+                        yaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED), range=[-4, 4]))
+            st.plotly_chart(fig_z2, use_container_width=True)
+
+            # — Individual legs —
+            fig_legs2 = go.Figure()
+            fig_legs2.add_trace(go.Scatter(
+                x=leg1c.index, y=leg1c, name=f"{leg1_name} {m1} (continuous)",
+                line=dict(color=TEAL, width=1.5),
+                customdata=tag1, hovertemplate="%{customdata}<br>%{y:.2f}<extra></extra>"))
+            fig_legs2.add_trace(go.Scatter(
+                x=leg2c.index, y=leg2c, name=f"{leg2_name} {m2} (continuous)",
+                line=dict(color=AMBER, width=1.5),
+                customdata=tag2, hovertemplate="%{customdata}<br>%{y:.2f}<extra></extra>"))
+            base_layout(fig_legs2, title=f"Individual Legs ({unit_lbl})",
+                        yaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED)))
             st.plotly_chart(fig_legs2, use_container_width=True)
 
-            base_layout(fig_spread2, title=f"Spread by Vintage — anchor {anchor_month} ({unit_lbl})")
-            st.plotly_chart(fig_spread2, use_container_width=True)
-
-            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            st.divider()
+            st.caption("Roll schedule — which vintage was active over which real dates")
+            roll_rows = []
+            for yr, grp in merged.groupby("year1"):
+                y2 = yr + yoff2
+                roll_rows.append({
+                    "Vintage":          yr,
+                    f"{leg1_name} leg": f"{leg1_name}{m1}{str(yr)[-2:]}",
+                    f"{leg2_name} leg": f"{leg2_name}{m2}{str(y2)[-2:]}",
+                    "From":             grp.index.min().date(),
+                    "To":               grp.index.max().date(),
+                })
+            st.dataframe(pd.DataFrame(roll_rows), hide_index=True, use_container_width=True)
 
     st.caption("ICEBREAKER ARB  —  Data: LSEG (interim) per-contract (KC/RC/CC/LCC)")
