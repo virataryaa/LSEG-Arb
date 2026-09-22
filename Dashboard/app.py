@@ -132,6 +132,44 @@ def continuous_pair(db1: pd.DataFrame, m1: str, db2: pd.DataFrame, m2: str, yoff
 
     return front1.reset_index().merge(sub2, on=["Date", "year2"], how="inner").set_index("Date").sort_index()
 
+def get_ltd(df: pd.DataFrame, month: str, year: int):
+    """Last trading day for one contract (constant across its rows)."""
+    sub = df.loc[(df["month"] == month) & (df["year"] == year), "LTD"].dropna()
+    return sub.iloc[0] if not sub.empty else None
+
+def price_asof(df: pd.DataFrame, month: str, year: int, asof: pd.Timestamp):
+    """Most recent settlement on or before `asof` for one contract. Returns
+    (price, date_used) — date_used lets the UI flag a stale/illiquid quote."""
+    sub = df[(df["month"] == month) & (df["year"] == year) & (df["Date"] <= asof)].dropna(subset=["settlement"])
+    if sub.empty:
+        return None, None
+    row = sub.sort_values("Date").iloc[-1]
+    return row["settlement"], row["Date"]
+
+def build_term_structure(db1, m_map, anchor_seq, db2, asof: pd.Timestamp, n_maturities: int):
+    """All not-yet-expired (anchor, vintage-year) combos across `anchor_seq`,
+    sorted by leg1's expiry — i.e. the actual forward sequence of listed
+    maturities (H26, K26, ..., ZX26, H27, ...), not one instance per month code."""
+    candidates = []
+    for yr in range(asof.year - 1, asof.year + 5):
+        for a in anchor_seq:
+            m1, m2, yoff2 = m_map[a]
+            ltd1 = get_ltd(db1, m1, yr)
+            if ltd1 is None or ltd1 < asof:
+                continue
+            candidates.append((ltd1, a, yr, m1, m2, yr + yoff2))
+    candidates.sort(key=lambda c: c[0])
+
+    rows = []
+    for ltd1, a, yr, m1, m2, y2 in candidates[:n_maturities]:
+        p1, d1 = price_asof(db1, m1, yr, asof)
+        p2, d2 = price_asof(db2, m2, y2, asof)
+        if p1 is None or p2 is None:
+            continue
+        rows.append(dict(anchor=a, year=yr, m1=m1, m2=m2, y2=y2, ltd1=ltd1,
+                          price1=p1, price2=p2, date1=d1, date2=d2))
+    return rows
+
 # ── Analytics helpers ─────────────────────────────────────────────────────────
 
 def zscore(spread: pd.Series, window: int) -> pd.Series:
@@ -150,7 +188,7 @@ st.markdown(
 )
 
 page = st.segmented_control(
-    "View", ["Spread Monitor", "Contract Explorer"],
+    "View", ["Spread Monitor", "Contract Explorer", "Term Structure"],
     default="Spread Monitor", key="page",
 )
 page = page or "Spread Monitor"
@@ -436,7 +474,7 @@ if page == "Spread Monitor":
 # TAB 2 — Contract Explorer  (specific-vintage time series)
 # ══════════════════════════════════════════════════════════════════════════════
 
-else:
+elif page == "Contract Explorer":
 
     st.markdown(
         f"<div style='font-size:0.8rem;color:{MUTED};letter-spacing:0.04em;"
@@ -548,5 +586,125 @@ else:
                     "To":               grp.index.max().date(),
                 })
             st.dataframe(pd.DataFrame(roll_rows), hide_index=True, use_container_width=True)
+
+    st.caption("ICEBREAKER ARB  —  Data: LSEG (interim) per-contract (KC/RC/CC/LCC)")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — Term Structure  (all active/upcoming spreads, one date)
+# ══════════════════════════════════════════════════════════════════════════════
+
+else:
+
+    st.markdown(
+        f"<div style='font-size:0.8rem;color:{MUTED};letter-spacing:0.04em;"
+        f"text-transform:uppercase'>ARB Monitor &nbsp;·&nbsp; {pair_name_short}  [Term Structure]</div>",
+        unsafe_allow_html=True,
+    )
+
+    z_choice = None
+    with st.sidebar:
+        if contract_db_available:
+            st.divider()
+            st.markdown("**Term Structure**")
+
+            _db1 = contract_db["KC"] if pair_key == "KCRC" else contract_db["CC"]
+            _db2 = contract_db["RC"] if pair_key == "KCRC" else contract_db["LCC"]
+            _date_min = min(_db1["Date"].min(), _db2["Date"].min())
+            _date_max = max(_db1["Date"].max(), _db2["Date"].max())
+
+            asof_date = st.date_input(
+                "As of date", value=_date_max.date(),
+                min_value=_date_min.date(), max_value=_date_max.date(),
+                key="ts_asof",
+            )
+
+            if pair_key == "KCRC":
+                z_choice = st.radio(
+                    "Z-month pairing", ["ZX", "ZF"], horizontal=True, key="ts_z_choice",
+                    format_func=lambda v: "KC Z vs RC X (same year)" if v == "ZX" else "KC Z vs RC F (next year)",
+                )
+
+            n_maturities = st.slider("Number of maturities", 4, 16, 8, step=1, key="ts_n")
+
+    st.subheader("Term Structure")
+
+    if not contract_db_available:
+        st.info("Per-contract data not yet synced — run ingest_contracts.py first.")
+    else:
+        leg1_name, leg2_name = ("KC", "RC") if pair_key == "KCRC" else ("CC", "LCC")
+        db1 = contract_db["KC"] if pair_key == "KCRC" else contract_db["CC"]
+        db2 = contract_db["RC"] if pair_key == "KCRC" else contract_db["LCC"]
+
+        if pair_key == "KCRC":
+            anchor_seq = ["H", "K", "N", "U", z_choice]
+        else:
+            anchor_seq = list(CCLCC_MONTH_MAP.keys())
+
+        asof_ts = pd.Timestamp(asof_date)
+        term_rows = build_term_structure(db1, month_map, anchor_seq, db2, asof_ts, n_maturities)
+
+        if not term_rows:
+            st.info("No active or upcoming contracts found as of this date.")
+        else:
+            st.caption(
+                f"All listed {leg1_name}/{leg2_name} maturities not yet expired as of "
+                f"**{asof_ts.date()}**, in order — this is a snapshot on one date, not a "
+                "time series like the other two tabs."
+            )
+
+            tags, spreads, customdata = [], [], []
+            for r in term_rows:
+                if pair_key == "KCRC":
+                    p1c = r["price1"] * KC_FACTOR
+                    p2c = r["price2"]
+                    if unit_choice == "¢/lb":
+                        p1c, p2c = p1c / KC_FACTOR, p2c / KC_FACTOR
+                else:
+                    p2c = r["price2"] * gbp_full.sort_index().asof(r["date2"])
+                    p1c = r["price1"]
+
+                tag1 = f"{leg1_name}{r['m1']}{str(r['year'])[-2:]}"
+                tag2 = f"{leg2_name}{r['m2']}{str(r['y2'])[-2:]}"
+                tags.append(f"{r['anchor']}{str(r['year'])[-2:]}")
+                spreads.append(p1c - p2c)
+                stale1 = "" if r["date1"] == asof_ts.normalize() else f"  (last quote {r['date1'].date()})"
+                stale2 = "" if r["date2"] == asof_ts.normalize() else f"  (last quote {r['date2'].date()})"
+                customdata.append(f"{tag1}: {p1c:,.2f}{stale1}<br>{tag2}: {p2c:,.2f}{stale2}")
+
+            unit_lbl = unit_choice if pair_key == "KCRC" else "$/MT"
+            bar_colors = [GREEN if v >= 0 else RED for v in spreads]
+
+            fig_term = go.Figure()
+            fig_term.add_trace(go.Bar(
+                x=tags, y=spreads, marker_color=bar_colors, opacity=0.85,
+                customdata=customdata,
+                hovertemplate="<b>%{x}</b><br>Spread: %{y:.2f}<br>%{customdata}<extra></extra>",
+            ))
+            fig_term.add_trace(go.Scatter(
+                x=tags, y=spreads, mode="lines+markers", name="Curve",
+                line=dict(color=FONT, width=1.5), marker=dict(size=6, color=FONT),
+                hoverinfo="skip", showlegend=False,
+            ))
+            fig_term.add_hline(y=0, line_color=MUTED, line_width=1)
+            base_layout(
+                fig_term,
+                title=f"{leg1_name}/{leg2_name} Term Structure — as of {asof_ts.date()} ({unit_lbl})",
+                xaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED),
+                           type="category", categoryorder="array", categoryarray=tags),
+                yaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED)),
+                showlegend=False,
+            )
+            st.plotly_chart(fig_term, use_container_width=True)
+
+            table_rows = []
+            for r, tag, spr_v in zip(term_rows, tags, spreads):
+                table_rows.append({
+                    "Maturity":         tag,
+                    f"{leg1_name} leg": f"{leg1_name}{r['m1']}{str(r['year'])[-2:]}",
+                    f"{leg2_name} leg": f"{leg2_name}{r['m2']}{str(r['y2'])[-2:]}",
+                    "Spread":           round(spr_v, 2),
+                    "Expiry":           r["ltd1"].date(),
+                })
+            st.dataframe(pd.DataFrame(table_rows), hide_index=True, use_container_width=True)
 
     st.caption("ICEBREAKER ARB  —  Data: LSEG (interim) per-contract (KC/RC/CC/LCC)")
