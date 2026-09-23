@@ -674,6 +674,15 @@ else:
             unit_lbl = unit_choice if pair_key == "KCRC" else "$/MT"
             bar_colors = [GREEN if v >= 0 else RED for v in spreads]
 
+            # Bars default to a 0-based axis, which flattens exactly the kind of
+            # small maturity-to-maturity differences a term structure is meant to
+            # show. Auto-scale to the data instead, with some headroom — bars can
+            # end up not touching the bottom of the plot, but the shape of the
+            # curve (what actually matters here) becomes visible.
+            y_min, y_max = min(spreads), max(spreads)
+            pad = max((y_max - y_min) * 0.15, abs(y_max) * 0.02, 1.0)
+            y_range = [y_min - pad, y_max + pad]
+
             fig_term = go.Figure()
             fig_term.add_trace(go.Bar(
                 x=tags, y=spreads, marker_color=bar_colors, opacity=0.85,
@@ -685,13 +694,14 @@ else:
                 line=dict(color=FONT, width=1.5), marker=dict(size=6, color=FONT),
                 hoverinfo="skip", showlegend=False,
             ))
-            fig_term.add_hline(y=0, line_color=MUTED, line_width=1)
+            if y_range[0] <= 0 <= y_range[1]:
+                fig_term.add_hline(y=0, line_color=MUTED, line_width=1)
             base_layout(
                 fig_term,
                 title=f"{leg1_name}/{leg2_name} Term Structure — as of {asof_ts.date()} ({unit_lbl})",
                 xaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED),
                            type="category", categoryorder="array", categoryarray=tags),
-                yaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED)),
+                yaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED), range=y_range),
                 showlegend=False,
             )
             st.plotly_chart(fig_term, use_container_width=True)
