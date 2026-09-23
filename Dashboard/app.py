@@ -182,7 +182,20 @@ def zscore(spread: pd.Series, window: int) -> pd.Series:
 st.markdown(
     "<style>"
     ".block-container{padding-top:3.5rem;padding-bottom:1rem}"
-    "div[data-testid='stSegmentedControl'] button{font-size:1rem;padding:0.5rem 1.5rem}"
+    # Pill-shaped tab bar: light-grey track, fully-rounded buttons, solid
+    # blue fill + white bold text on the active one, muted grey on the rest.
+    "div[data-testid='stButtonGroup'] div[data-baseweb='button-group']{"
+    "background-color:#eef1f6;border-radius:999px;padding:4px;gap:2px;}"
+    "button[data-testid^='stBaseButton-segmented_control']{"
+    "border:none!important;border-radius:999px!important;"
+    "font-size:1rem;padding:0.5rem 1.6rem;font-weight:500;"
+    "background-color:transparent!important;box-shadow:none!important;"
+    "transition:background-color 0.15s ease;}"
+    "button[data-testid='stBaseButton-segmented_control'] p{color:#6b7280!important;}"
+    "button[data-testid='stBaseButton-segmented_controlActive']{"
+    f"background-color:{TEAL}!important;}}"
+    "button[data-testid='stBaseButton-segmented_controlActive'] p{"
+    "color:#ffffff!important;font-weight:600;}"
     "</style>",
     unsafe_allow_html=True,
 )
