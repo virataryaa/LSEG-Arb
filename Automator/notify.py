@@ -41,6 +41,8 @@ def spread_summary() -> str:
         ("RC",  1.0,       "$/MT"),
         ("CC",  1.0,       "$/MT"),
         ("LCC", 1.0,       "GBP/MT"),
+        ("SB",  KC_FACTOR, "$/MT"),
+        ("LSU", 1.0,       "$/MT"),
     ]:
         path = DB_DIR / f"front_{name}.parquet"
         if not path.exists():

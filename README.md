@@ -2,7 +2,7 @@
 
 Interim replacement for `ICEBREAKER/Arb`, rebuilt against the **LSEG Data
 API** (`lseg.data`) instead of ICE Connect (`icepython`), for the period
-while ICE API access is unavailable. Spread monitor for KC/RC (Arabica vs
+while ICE API access is unavailable. Spread monitor for SB/LSU (raw vs white sugar), KC/RC (Arabica vs
 Robusta) and CC/LCC (NY vs London Cocoa).
 
 ## Scope — this is the simplified dashboard, not a 1:1 port

@@ -14,6 +14,8 @@ Units match the raw LSEG quote, same as the ICE source:
     RC  -> $/MT
     CC  -> $/MT
     LCC -> GBP/MT  (multiply by GBP/USD for $/MT)
+    SB  -> c/lb    (multiply by 22.0462 for $/MT)
+    LSU -> $/MT
 
 Usage:
     python ingest_front_lseg.py            # incremental
@@ -47,6 +49,8 @@ ROOTS = {
     "RC":  "LRC",
     "CC":  "CC",
     "LCC": "LCC",
+    "SB":  "SB",    # ICE US Sugar No.11  (SBc1/SBc2, same roots as the Rollex builder)
+    "LSU": "LSU",   # ICE Europe White Sugar No.5
 }
 
 

@@ -1,6 +1,6 @@
 """
 ICEBREAKER — ARB Dashboard
-Spread Monitor for KC/RC and CC/LCC pairs.
+Spread Monitor for KC/RC, CC/LCC and SB/LSU pairs.
 """
 
 import warnings
@@ -33,6 +33,38 @@ KCRC_MONTH_MAP = {   # anchor -> (KC month, RC month, RC year offset)
     "ZF": ("Z", "F", 1),
 }
 CCLCC_MONTH_MAP = {mc: (mc, mc, 0) for mc in ["H", "K", "N", "U", "Z"]}  # CC/LCC share month codes
+# White premium (LSU - SB x 22.0462), same pairing as the desk's WP config in
+# Non Fundamental/Seasonality/Code/market_configs.py. Anchor = LSU month;
+# value = (LSU month, SB month, SB year offset) - e.g. LSU Q (Aug) vs SB N (Jul),
+# LSU Z (Dec) vs SB H of the following year (SB has no Dec contract).
+SBLSU_MONTH_MAP = {
+    "H": ("H", "H", 0),
+    "K": ("K", "K", 0),
+    "Q": ("Q", "N", 0),
+    "V": ("V", "V", 0),
+    "Z": ("Z", "H", 1),
+}
+
+# Per-pair config. leg1 - leg2 is the spread. mult converts each leg's raw quote to
+# $/MT (KC and SB are quoted in c/lb); fx = leg2 is in GBP and needs GBP/USD; lb = a
+# leg is in c/lb, so the $/MT vs c/lb units toggle applies.
+PAIRS = {
+    "KCRC": dict(label="KC / RC", leg1="KC", leg2="RC", mult=(KC_FACTOR, 1.0), lb=True, fx=False,
+                 months=KCRC_MONTH_MAP, full="KC / RC  —  Arabica vs Robusta", default_unit=1,
+                 spread_label="Arabica Premium over Robusta",
+                 ratio_title="KC/RC Price Ratio (Arabica/Robusta)",
+                 ratio_note="Ratio of Arabica to Robusta price. Roasters blend the two; extreme ratios "
+                            "historically mean-revert as substitution economics kick in."),
+    "CCLCC": dict(label="CC / LCC", leg1="CC", leg2="LCC", mult=(1.0, 1.0), lb=False, fx=True,
+                  months=CCLCC_MONTH_MAP, full="CC / LCC  —  NY vs London Cocoa", default_unit=0,
+                  spread_label="NY Premium over London Cocoa", ratio_title="", ratio_note=""),
+    "SBLSU": dict(label="SB / LSU", leg1="LSU", leg2="SB", mult=(1.0, KC_FACTOR), lb=True, fx=False,
+                  months=SBLSU_MONTH_MAP, full="SB / LSU  —  Raw vs White Sugar", default_unit=0,
+                  spread_label="White Premium (LSU over SB)",
+                  ratio_title="LSU/SB Price Ratio (White/Raw)",
+                  ratio_note="White sugar price relative to raw sugar, both in the same units. "
+                             "A higher ratio means a fatter refining margin."),
+}
 
 # ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -71,7 +103,7 @@ def load_all(mtimes):  # mtimes keys the cache so a new parquet push invalidates
 
     # Actual front-month prices (1st/2nd month, no roll adjustment)
     front = {}
-    for name in ["KC", "RC", "CC", "LCC"]:
+    for name in ["KC", "RC", "CC", "LCC", "SB", "LSU"]:
         path = DB / f"front_{name}.parquet"
         front[name] = pd.read_parquet(path) if path.exists() else None
 
@@ -81,16 +113,11 @@ _mtimes = tuple(p.stat().st_mtime_ns if p.exists() else 0 for p in sorted(DB.glo
 gbp_raw, front = load_all(_mtimes)
 gbp_full = gbp_raw.copy()  # unsliced by date range — Contract Explorer needs historical vintages too
 
-front_available = all(front[n] is not None for n in ["KC", "RC", "CC", "LCC"])
-
-if not front_available:
-    st.error("Front-month data not yet ingested — run ingest_front.py first.")
-    st.stop()
-
 # ── Per-contract data (for Contract Explorer) ──────────────────────────────────
 
 CONTRACT_FILES = {"KC": "kc_futures.parquet", "RC": "rc_futures.parquet",
-                   "CC": "cc_futures.parquet", "LCC": "lcc_futures.parquet"}
+                   "CC": "cc_futures.parquet", "LCC": "lcc_futures.parquet",
+                   "SB": "sb_futures.parquet", "LSU": "lsu_futures.parquet"}
 
 @st.cache_data(ttl=3600)
 def load_contracts(mtimes):
@@ -103,7 +130,6 @@ def load_contracts(mtimes):
 _contract_mtimes = tuple((DB / f).stat().st_mtime_ns if (DB / f).exists() else 0
                          for f in CONTRACT_FILES.values())
 contract_db = load_contracts(_contract_mtimes)
-contract_db_available = all(contract_db[n] is not None for n in CONTRACT_FILES)
 
 def continuous_leg(df: pd.DataFrame, month: str) -> pd.DataFrame:
     """Continuous single-leg series for one month code: at each date, use
@@ -283,14 +309,6 @@ page = st.segmented_control(
 )
 page = page or "Spread Monitor"
 
-# Full date extent across all price data (period presets count back from DATA_MAX).
-_mins = [front[n].index.min() for n in front]
-_maxs = [front[n].index.max() for n in front]
-if contract_db_available:
-    _mins += [contract_db[n]["Date"].min() for n in contract_db]
-    _maxs += [contract_db[n]["Date"].max() for n in contract_db]
-DATA_MIN, DATA_MAX = pd.Timestamp(min(_mins)), pd.Timestamp(max(_maxs))
-
 period, d_start, d_end = "5Y", None, None
 
 def render_period(box, n_all_yrs: int):
@@ -322,16 +340,17 @@ def render_period(box, n_all_yrs: int):
 
 with st.sidebar:
     st.markdown("<div class='sb-title'>ARB Monitor</div>", unsafe_allow_html=True)
-    st.markdown("<div class='sb-caption'>KC/RC (Arabica vs Robusta) and CC/LCC (NY vs London Cocoa) spreads.</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sb-caption'>KC/RC (Arabica vs Robusta), CC/LCC (NY vs London Cocoa) and SB/LSU (Raw vs White Sugar) spreads.</div>", unsafe_allow_html=True)
     st.markdown("### Configuration")
-    pair = st.radio("Pair", ["KC / RC", "CC / LCC"],
-                    index=0, horizontal=True, label_visibility="collapsed")
-    pair_key = "KCRC" if pair.startswith("KC") else "CCLCC"
+    _label_to_key = {v["label"]: k for k, v in PAIRS.items()}
+    pair = st.radio("Pair", list(_label_to_key), index=0, horizontal=True, label_visibility="collapsed")
+    pair_key = _label_to_key[pair]
 
-    if pair_key == "KCRC":
+    if PAIRS[pair_key]["lb"]:
         st.divider()
         st.markdown("**Units**")
-        unit_choice = st.radio("Units", ["$/MT", "¢/lb"], index=1, horizontal=True, label_visibility="collapsed")
+        unit_choice = st.radio("Units", ["$/MT", "¢/lb"], index=PAIRS[pair_key]["default_unit"], horizontal=True,
+                               label_visibility="collapsed", key=f"units_{pair_key}")
     else:
         unit_choice = "$/MT"
 
@@ -343,13 +362,43 @@ with st.sidebar:
         st.markdown("**Period**")
         period_box = st.container()
 
-month_map = KCRC_MONTH_MAP if pair_key == "KCRC" else CCLCC_MONTH_MAP
-pair_name_short = "KC / RC  —  Arabica vs Robusta" if pair_key == "KCRC" else "CC / LCC  —  NY vs London Cocoa"
+P = PAIRS[pair_key]
+leg1_name, leg2_name = P["leg1"], P["leg2"]
+month_map = P["months"]
+pair_name_short = P["full"]
+unit_lbl = unit_choice if P["lb"] else "$/MT"
+
+if front[leg1_name] is None or front[leg2_name] is None:
+    st.error(f"Front-month data for {leg1_name}/{leg2_name} not yet ingested — run ingest_front_lseg.py first.")
+    st.stop()
+contract_db_available = contract_db[leg1_name] is not None and contract_db[leg2_name] is not None
+db1, db2 = contract_db[leg1_name], contract_db[leg2_name]
+
+# Full date extent of this pair's price data (period presets count back from DATA_MAX).
+_mins = [front[n].index.min() for n in (leg1_name, leg2_name)]
+_maxs = [front[n].index.max() for n in (leg1_name, leg2_name)]
+if contract_db_available:
+    _mins += [d["Date"].min() for d in (db1, db2)]
+    _maxs += [d["Date"].max() for d in (db1, db2)]
+DATA_MIN, DATA_MAX = pd.Timestamp(min(_mins)), pd.Timestamp(max(_maxs))
+
+def _legs(px1, px2, fx=None):
+    """Both legs in the chosen units: raw quotes -> $/MT (x22.0462 for c/lb legs, x GBP/USD
+    for a GBP leg), then / 22.0462 if the c/lb view is selected."""
+    a = px1 * P["mult"][0]
+    b = px2 * P["mult"][1]
+    if P["fx"]:
+        b = (b * fx).dropna()
+    if P["lb"] and unit_choice == "¢/lb":
+        a, b = a / KC_FACTOR, b / KC_FACTOR
+    return a, b
 
 def fx_note():
-    """Cocoa only: say how LCC (quoted in GBP) is brought to USD for the spread."""
+    """Say how each pair's legs are brought to the same units."""
     if pair_key == "CCLCC":
         st.caption(r"Cocoa spread = CC (\$/MT) − LCC (£/MT) × GBP/USD, so both legs are in \$/MT. GBP/USD chart is at the bottom.")
+    elif pair_key == "SBLSU":
+        st.caption(r"White premium = LSU (\$/MT) − SB (¢/lb) × 22.0462, so both legs are in \$/MT.")
 
 def gbp_fx_chart():
     """Cocoa only: GBP/USD line over the chosen Period (last 5 years on Term Structure,
@@ -390,26 +439,13 @@ if page == "Spread Monitor":
 
     src_tag = contract_choice.split("(")[0].strip()  # e.g. "1st month"
 
-    if pair_key == "KCRC":
-        kc_s    = _pick("KC")
-        rc_s    = _pick("RC")
-        kc_mt   = kc_s * KC_FACTOR
-        spread  = (kc_mt - rc_s).dropna()
-        if unit_choice == "¢/lb":
-            spread = spread / KC_FACTOR
-        leg1_label, leg2_label = f"KC ({unit_choice})", f"RC ({unit_choice})"
-        spread_label = f"Arabica Premium over Robusta ({unit_choice})"
-        pair_title   = f"{pair_name_short}  [{src_tag}]"
-        has_fx       = False
-    else:
-        cc_s    = _pick("CC")
-        lcc_s   = _pick("LCC")
-        lcc_usd = (lcc_s * gbp_raw).dropna()
-        spread  = (cc_s - lcc_usd).dropna()
-        leg1_label, leg2_label = "CC ($/MT)", "LCC in USD ($/MT)"
-        spread_label = "NY Premium over London Cocoa ($/MT)"
-        pair_title   = f"{pair_name_short}  [{src_tag}]"
-        has_fx       = True
+    l1_full, l2_full = _legs(_pick(leg1_name), _pick(leg2_name), gbp_raw)
+    spread = (l1_full - l2_full).dropna()
+    leg1_label = f"{leg1_name} ({unit_lbl})"
+    leg2_label = f"{leg2_name} in USD ($/MT)" if P["fx"] else f"{leg2_name} ({unit_lbl})"
+    spread_label = f"{P['spread_label']} ({unit_lbl})"
+    pair_title   = f"{pair_name_short}  [{src_tag}]"
+    has_fx       = P["fx"]
 
     spread_full = spread.copy()  # full history, independent of the date-range slider below — seasonality needs every year
 
@@ -421,17 +457,6 @@ if page == "Spread Monitor":
     z_full   = zscore(spread, zscore_win)
     mu_full  = spread.rolling(zscore_win).mean()
     sig_full = spread.rolling(zscore_win).std()
-
-    # l1 / l2 in the chosen units — used by all sections
-    if pair_key == "KCRC":
-        l1_full = _pick("KC") * KC_FACTOR
-        l2_full = _pick("RC")
-        if unit_choice == "¢/lb":
-            l1_full = l1_full / KC_FACTOR
-            l2_full = l2_full / KC_FACTOR
-    else:
-        l1_full = _pick("CC")
-        l2_full = (_pick("LCC") * gbp_raw).dropna()
 
     def _view(x):
         return x.loc[str(d_start):str(d_end)]
@@ -572,13 +597,11 @@ if page == "Spread Monitor":
 
     st.divider()
 
-    # ── SECTION 3 — Ratio (KC/RC only) ───────────────────────────────────────────
+    # ── SECTION 3 — Ratio (not for cocoa: its legs are in different currencies) ───
 
     if not has_fx:
         st.subheader("Ratio")
-        st.caption("Ratio of Arabica to Robusta price. "
-                   "Roasters blend the two; extreme ratios historically mean-revert "
-                   "as substitution economics kick in.")
+        st.caption(P["ratio_note"])
 
         ratio_full = l1_full / l2_full
         ratio = _view(ratio_full)
@@ -594,12 +617,12 @@ if page == "Spread Monitor":
         fig_ratio.add_trace(go.Scatter(x=ratio.index, y=mu_r,
                                        line=dict(color=MUTED, width=1), name="Mean"))
         fig_ratio.add_trace(go.Scatter(x=ratio.index, y=ratio,
-                                       line=dict(color=TEAL, width=2), name="KC/RC Ratio"))
-        base_layout(fig_ratio, title="KC/RC Price Ratio (Arabica/Robusta)")
+                                       line=dict(color=TEAL, width=2), name=f"{leg1_name}/{leg2_name} Ratio"))
+        base_layout(fig_ratio, title=P["ratio_title"])
         st.plotly_chart(fig_ratio, use_container_width=True)
 
     gbp_fx_chart()
-    st.caption("ICEBREAKER ARB  —  Data: LSEG (interim) front-month (1st/2nd) + GBP/USD")
+    st.caption("ICEBREAKER ARB  —  Data: LSEG (interim) front-month (1st/2nd) + GBP/USD (cocoa)")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 2 — Contract Explorer  (specific-vintage time series)
@@ -624,9 +647,6 @@ elif page == "Contract Explorer":
         st.info("Per-contract data not yet synced — run ingest_contracts.py first.")
     else:
         m1, m2, yoff2 = month_map[anchor_month]
-        leg1_name, leg2_name = ("KC", "RC") if pair_key == "KCRC" else ("CC", "LCC")
-        db1 = contract_db["KC"] if pair_key == "KCRC" else contract_db["CC"]
-        db2 = contract_db["RC"] if pair_key == "KCRC" else contract_db["LCC"]
 
         merged = continuous_pair(db1, m1, db2, m2, yoff2)
 
@@ -639,18 +659,11 @@ elif page == "Contract Explorer":
                 + " — one continuous line. It moves to the next contract right after each one expires."
             )
 
-            leg1 = merged["leg1"]
-            if pair_key == "KCRC":
-                leg1c = leg1 * KC_FACTOR
-                leg2c = merged["leg2"].copy()
-                if unit_choice == "¢/lb":
-                    leg1c, leg2c = leg1c / KC_FACTOR, leg2c / KC_FACTOR
-            else:
-                leg2c = (merged["leg2"] * gbp_full.reindex(merged.index).ffill()).dropna()
-                leg1c = leg1.reindex(leg2c.index)
+            leg1c, leg2c = _legs(merged["leg1"], merged["leg2"], gbp_full.reindex(merged.index).ffill())
+            if P["fx"]:
+                leg1c = leg1c.reindex(leg2c.index)
 
             spr = (leg1c - leg2c).dropna()
-            unit_lbl = unit_choice if pair_key == "KCRC" else "$/MT"
 
             period, d_start, d_end = render_period(period_box, merged["year1"].nunique() - 1)
 
@@ -752,7 +765,7 @@ elif page == "Contract Explorer":
             st.dataframe(pd.DataFrame(roll_rows), hide_index=True, use_container_width=True)
 
     gbp_fx_chart()
-    st.caption("ICEBREAKER ARB  —  Data: LSEG (interim) per-contract (KC/RC/CC/LCC)")
+    st.caption("ICEBREAKER ARB  —  Data: LSEG (interim) per-contract (KC/RC/CC/LCC/SB/LSU)")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — Term Structure  (all active/upcoming spreads, one date)
@@ -768,8 +781,7 @@ else:
             st.divider()
             st.markdown("**Term Structure**")
 
-            _db1 = contract_db["KC"] if pair_key == "KCRC" else contract_db["CC"]
-            _db2 = contract_db["RC"] if pair_key == "KCRC" else contract_db["LCC"]
+            _db1, _db2 = db1, db2
             _date_min = min(_db1["Date"].min(), _db2["Date"].min())
             _date_max = max(_db1["Date"].max(), _db2["Date"].max())
 
@@ -791,14 +803,10 @@ else:
     if not contract_db_available:
         st.info("Per-contract data not yet synced — run ingest_contracts.py first.")
     else:
-        leg1_name, leg2_name = ("KC", "RC") if pair_key == "KCRC" else ("CC", "LCC")
-        db1 = contract_db["KC"] if pair_key == "KCRC" else contract_db["CC"]
-        db2 = contract_db["RC"] if pair_key == "KCRC" else contract_db["LCC"]
-
         if pair_key == "KCRC":
             anchor_seq = ["H", "K", "N", "U", z_choice]
         else:
-            anchor_seq = list(CCLCC_MONTH_MAP.keys())
+            anchor_seq = list(month_map.keys())
 
         asof_ts = pd.Timestamp(asof_date)
         term_rows = build_term_structure(db1, month_map, anchor_seq, db2, asof_ts, n_maturities)
@@ -814,14 +822,12 @@ else:
 
             tags, spreads, customdata = [], [], []
             for r in term_rows:
-                if pair_key == "KCRC":
-                    p1c = r["price1"] * KC_FACTOR
-                    p2c = r["price2"]
-                    if unit_choice == "¢/lb":
-                        p1c, p2c = p1c / KC_FACTOR, p2c / KC_FACTOR
-                else:
-                    p2c = r["price2"] * gbp_full.sort_index().asof(r["date2"])
-                    p1c = r["price1"]
+                p1c = r["price1"] * P["mult"][0]
+                p2c = r["price2"] * P["mult"][1]
+                if P["fx"]:
+                    p2c = p2c * gbp_full.sort_index().asof(r["date2"])
+                if P["lb"] and unit_choice == "¢/lb":
+                    p1c, p2c = p1c / KC_FACTOR, p2c / KC_FACTOR
 
                 tag1 = f"{leg1_name}{r['m1']}{str(r['year'])[-2:]}"
                 tag2 = f"{leg2_name}{r['m2']}{str(r['y2'])[-2:]}"
@@ -831,7 +837,6 @@ else:
                 stale2 = "" if r["date2"] == asof_ts.normalize() else f"  (last quote {r['date2'].date()})"
                 customdata.append(f"{tag1}: {p1c:,.2f}{stale1}<br>{tag2}: {p2c:,.2f}{stale2}")
 
-            unit_lbl = unit_choice if pair_key == "KCRC" else "$/MT"
             bar_colors = [GREEN if v >= 0 else RED for v in spreads]
 
             # Bars default to a 0-based axis, which flattens exactly the kind of
@@ -878,4 +883,4 @@ else:
             st.dataframe(pd.DataFrame(table_rows), hide_index=True, use_container_width=True)
 
     gbp_fx_chart()
-    st.caption("ICEBREAKER ARB  —  Data: LSEG (interim) per-contract (KC/RC/CC/LCC)")
+    st.caption("ICEBREAKER ARB  —  Data: LSEG (interim) per-contract (KC/RC/CC/LCC/SB/LSU)")

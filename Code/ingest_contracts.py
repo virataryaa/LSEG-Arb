@@ -1,7 +1,7 @@
 """
 Arb — Per-Contract Price Sync
 ===========================================================
-Copies the trimmed per-contract price history (KC/RC/CC/LCC) out of the
+Copies the trimmed per-contract price history (KC/RC/CC/LCC/SB/LSU) out of the
 Futures/Database project into this repo's own Database/ folder, so the
 Contract Explorer section of app.py can read a single specific vintage
 (e.g. KC H26) with real calendar dates instead of only the rolled
@@ -34,7 +34,8 @@ log = logging.getLogger(__name__)
 SRC_DIR = Path(__file__).parent.parent.parent / "Futures" / "Database"
 OUT_DIR = Path(__file__).parent.parent / "Database"
 
-FILES = ["kc_futures.parquet", "rc_futures.parquet", "cc_futures.parquet", "lcc_futures.parquet"]
+FILES = ["kc_futures.parquet", "rc_futures.parquet", "cc_futures.parquet", "lcc_futures.parquet",
+         "sb_futures.parquet", "lsu_futures.parquet"]
 COLS  = ["Date", "month", "year", "FND", "LTD", "settlement"]
 
 
