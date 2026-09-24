@@ -51,7 +51,7 @@ if %ERRORLEVEL% NEQ 0 (
 :: Step 4 - Push updated parquets to GitHub
 echo [4] Pushing to GitHub... >> %LOG%
 cd /d "C:\Users\virat.arya\ETG\SoftsDatabase - Documents\Database\Hardmine\LSEG\Arb"
-git add Database\front_KC.parquet Database\front_RC.parquet Database\front_CC.parquet Database\front_LCC.parquet Database\fx_gbp.parquet >> %LOG% 2>&1
+git add Database\front_KC.parquet Database\front_RC.parquet Database\front_CC.parquet Database\front_LCC.parquet Database\front_SB.parquet Database\front_LSU.parquet Database\fx_gbp.parquet >> %LOG% 2>&1
 git add Database\kc_futures.parquet Database\rc_futures.parquet Database\cc_futures.parquet Database\lcc_futures.parquet Database\sb_futures.parquet Database\lsu_futures.parquet >> %LOG% 2>&1
 git diff --cached --quiet
 if %ERRORLEVEL% NEQ 0 (
