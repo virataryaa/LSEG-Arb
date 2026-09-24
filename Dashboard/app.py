@@ -45,6 +45,7 @@ TEAL   = "#2563eb"
 GREEN  = "#16a34a"
 RED    = "#dc2626"
 AMBER  = "#d97706"
+NAVY   = "#0a2463"   # selected-pill / current-year colour, same as the Cotton On-Call dashboard
 
 def base_layout(fig, **kw):
     ax = dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED),
@@ -177,18 +178,38 @@ def zscore(spread: pd.Series, window: int) -> pd.Series:
     sig = spread.rolling(window).std()
     return (spread - mu) / sig
 
+def pick_lookback(key: str, hist_years: list):
+    """Radio for how many past years the seasonal bands/average use.
+    hist_years = completed years available (current year excluded).
+    Returns the years actually used."""
+    n_all = len(hist_years)
+    choice = st.radio(
+        "Lookback", ["5Y", "10Y", "All"], index=2, horizontal=True, key=key,
+        label_visibility="collapsed",
+        format_func=lambda v: f"All ({n_all} yrs)" if v == "All" else v,
+    )
+    n = {"5Y": 5, "10Y": 10}.get(choice)
+    used = hist_years[-n:] if n else hist_years
+    if used:
+        st.caption(f"Average of {len(used)} yrs ({used[0]}–{used[-1]}), excl. current year.")
+    return used
+
 def seasonality_bands_fig(long_df: pd.DataFrame, x_col: str, val_col: str, title: str,
                            xaxis_title: str, yaxis_title: str, current_year: int, last_year: int,
-                           reversed_x: bool = False, band_smooth: int = 15):
+                           reversed_x: bool = False, band_smooth: int = 15, band_years=None):
     """Nested Min-Max / 10-90 / 25-75 percentile bands + dotted average +
     bold current-year line + red last-year line. long_df has one row per
-    (x_col, val_col, yr) observation.
+    (x_col, val_col, yr) observation. `band_years` restricts which years feed
+    the bands/average (the current/last-year lines always use the full data).
 
     Daily data across only ~10-15 years means each x value has just that many
     observations (and some fewer, from weekends/holidays), so raw per-day
     percentiles are extremely spiky. The bands (not the actual year lines) are
     smoothed with a centred rolling mean over `band_smooth` neighbouring x values."""
-    band = long_df.groupby(x_col)[val_col].agg(
+    stat_df = long_df if not band_years else long_df[long_df["yr"].isin(band_years)]
+    if stat_df.empty:
+        stat_df = long_df
+    band = stat_df.groupby(x_col)[val_col].agg(
         lo="min", p10=lambda s: s.quantile(0.10), p25=lambda s: s.quantile(0.25),
         avg="mean", p75=lambda s: s.quantile(0.75), p90=lambda s: s.quantile(0.90), hi="max",
     ).sort_index()
@@ -196,13 +217,14 @@ def seasonality_bands_fig(long_df: pd.DataFrame, x_col: str, val_col: str, title
         band = band.rolling(band_smooth, center=True, min_periods=1).mean()
 
     fig = go.Figure()
-    band_pairs = [("lo", "hi", "rgba(37,99,235,0.08)", "Min–Max"), ("p10", "p90", "rgba(37,99,235,0.16)", "10th–90th pct"), ("p25", "p75", "rgba(37,99,235,0.28)", "25th–75th pct")]
+    # Colours match the Cotton On-Call seasonality chart.
+    band_pairs = [("lo", "hi", "rgba(31,138,156,0.08)", "Min–Max"), ("p10", "p90", "rgba(31,138,156,0.16)", "10th–90th pct"), ("p25", "p75", "rgba(31,138,156,0.28)", "25th–75th pct")]
     for lo_col, hi_col, color, name in band_pairs:
         fig.add_trace(go.Scatter(x=band.index, y=band[hi_col], line=dict(width=0), showlegend=False, hoverinfo="skip"))
         fig.add_trace(go.Scatter(x=band.index, y=band[lo_col], fill="tonexty", fillcolor=color, line=dict(width=0), name=name))
-    fig.add_trace(go.Scatter(x=band.index, y=band["avg"], mode="lines", name="Average", line=dict(color=MUTED, width=1.5, dash="dot")))
+    fig.add_trace(go.Scatter(x=band.index, y=band["avg"], mode="lines", name="Average", line=dict(color="#4a5578", width=1.5, dash="dot")))
 
-    for yr, color, width in [(last_year, RED, 2), (current_year, TEAL, 3)]:
+    for yr, color, width in [(last_year, "#c94a4a", 2), (current_year, NAVY, 3)]:
         grp = long_df[long_df["yr"] == yr].sort_values(x_col)
         if grp.empty:
             continue
@@ -223,42 +245,57 @@ def seasonality_bands_fig(long_df: pd.DataFrame, x_col: str, val_col: str, title
 st.markdown(
     "<style>"
     ".block-container{padding-top:3.5rem;padding-bottom:1rem}"
-    # Pill-shaped tab bar: light-grey track, fully-rounded buttons, solid
-    # blue fill + white bold text on the active one, muted grey on the rest.
+    # Tab bar + radios styled to match the Cotton On-Call dashboard: light-grey
+    # rounded track, fully-rounded pills, navy fill + white text when selected.
     "div[data-testid='stButtonGroup'] div[data-baseweb='button-group']{"
-    "background-color:#eef1f6;border-radius:999px;padding:4px;gap:2px;}"
+    "background-color:#eef0f6;border-radius:999px;padding:4px;gap:4px;}"
     "button[data-testid^='stBaseButton-segmented_control']{"
     "border:none!important;border-radius:999px!important;"
-    "font-size:1rem;padding:0.5rem 1.6rem;font-weight:500;"
-    "background-color:transparent!important;box-shadow:none!important;"
+    "padding:8px 20px;background-color:transparent!important;box-shadow:none!important;"
     "transition:background-color 0.15s ease;}"
-    "button[data-testid='stBaseButton-segmented_control'] p{color:#6b7280!important;}"
+    "button[data-testid^='stBaseButton-segmented_control'] p{font-size:14px;font-weight:400;}"
+    "button[data-testid='stBaseButton-segmented_control'] p{color:#5a6688!important;}"
     "button[data-testid='stBaseButton-segmented_controlActive']{"
-    f"background-color:{TEAL}!important;}}"
+    f"background-color:{NAVY}!important;}}"
     "button[data-testid='stBaseButton-segmented_controlActive'] p{"
+    "color:#ffffff!important;}"
+    # radios -> same pill/segmented look as Cotton's date-range radio
+    "div[role='radiogroup']{background:#eef0f6;padding:4px;border-radius:999px;gap:2px;"
+    "display:inline-flex;flex-wrap:wrap;}"
+    "div[role='radiogroup'] label{background:transparent!important;border-radius:999px!important;"
+    "padding:4px 12px!important;margin:0!important;}"
+    "div[role='radiogroup'] label[data-baseweb='radio']>div:first-child{display:none;}"
+    "div[role='radiogroup'] label div[data-testid='stMarkdownContainer'] p{font-size:12px!important;color:#5a6688;}"
+    "div[role='radiogroup'] label:has(input:checked){background:#0a2463!important;}"
+    "div[role='radiogroup'] label:has(input:checked) div[data-testid='stMarkdownContainer'] p{"
     "color:#ffffff!important;font-weight:600;}"
+    # sidebar title (replaces the old main-area header line)
+    ".sb-title{font-family:'Fraunces',Georgia,serif;font-size:1.5rem;font-weight:600;color:#0a2463;margin-bottom:2px;}"
+    ".sb-caption{font-size:11px;color:#7a86a8;margin-bottom:16px;line-height:1.4;}"
     "</style>",
     unsafe_allow_html=True,
 )
 
 page = st.segmented_control(
     "View", ["Spread Monitor", "Contract Explorer", "Term Structure"],
-    default="Spread Monitor", key="page",
+    default="Spread Monitor", key="page", label_visibility="collapsed",
 )
 page = page or "Spread Monitor"
 
 # ── Sidebar — shared controls ────────────────────────────────────────────────────
 
 with st.sidebar:
+    st.markdown("<div class='sb-title'>ARB Monitor</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sb-caption'>KC/RC (Arabica vs Robusta) and CC/LCC (NY vs London Cocoa) spreads.</div>", unsafe_allow_html=True)
     st.markdown("### Configuration")
-    pair = st.radio("Pair", ["KC / RC  (Arabica vs Robusta)", "CC / LCC  (NY vs London Cocoa)"],
-                    index=0, label_visibility="collapsed")
+    pair = st.radio("Pair", ["KC / RC", "CC / LCC"],
+                    index=0, horizontal=True, label_visibility="collapsed")
     pair_key = "KCRC" if pair.startswith("KC") else "CCLCC"
 
     if pair_key == "KCRC":
         st.divider()
         st.markdown("**Units**")
-        unit_choice = st.radio("Units", ["$/MT", "¢/lb"], index=1, label_visibility="collapsed")
+        unit_choice = st.radio("Units", ["$/MT", "¢/lb"], index=1, horizontal=True, label_visibility="collapsed")
     else:
         unit_choice = "$/MT"
 
@@ -274,8 +311,8 @@ if page == "Spread Monitor":
     with st.sidebar:
         st.divider()
         st.markdown("**Price source**")
-        contract_choice = st.radio("Contract", ["1st month (actual)", "2nd month (actual)"],
-                                   index=0, label_visibility="collapsed")
+        contract_choice = st.radio("Contract", ["1st month", "2nd month"],
+                                   index=0, horizontal=True, label_visibility="collapsed")
         use_col = "px1" if "1st" in contract_choice else "px2"
 
         st.divider()
@@ -314,12 +351,6 @@ if page == "Spread Monitor":
 
     date_min = spread.index.min().date()
     date_max = spread.index.max().date()
-
-    st.markdown(
-        f"<div style='font-size:0.8rem;color:{MUTED};letter-spacing:0.04em;"
-        f"text-transform:uppercase'>ARB Monitor &nbsp;·&nbsp; {pair_title}</div>",
-        unsafe_allow_html=True,
-    )
 
     def _dates_to_slider() -> None:
         """Push a manual Start/End edit back into the slider."""
@@ -403,7 +434,7 @@ if page == "Spread Monitor":
     fig_sp.add_trace(go.Scatter(
         x=spread.index, y=spread, name="Spread",
         line=dict(color=TEAL, width=2), showlegend=True))
-    base_layout(fig_sp, title=spread_label)
+    base_layout(fig_sp, title=f"{spread_label} · {src_tag}")
     st.plotly_chart(fig_sp, use_container_width=True)
 
     # — Seasonality —
@@ -411,9 +442,11 @@ if page == "Spread Monitor":
     season_df["x"] = season_df.index.dayofyear
     season_df["yr"] = season_df.index.year
     cur_yr = season_df["yr"].max()
+    hist_years = sorted(y for y in season_df["yr"].unique() if y < cur_yr)
+    band_years = pick_lookback(f"lb_sm_{pair_key}", hist_years)
     fig_season = seasonality_bands_fig(
         season_df, "x", "val", f"Seasonality — {spread_label}",
-        "Day of year", spread_label, cur_yr, cur_yr - 1,
+        "Day of year", spread_label, cur_yr, cur_yr - 1, band_years=band_years,
     )
     st.plotly_chart(fig_season, use_container_width=True)
 
@@ -543,12 +576,6 @@ if page == "Spread Monitor":
 
 elif page == "Contract Explorer":
 
-    st.markdown(
-        f"<div style='font-size:0.8rem;color:{MUTED};letter-spacing:0.04em;"
-        f"text-transform:uppercase'>ARB Monitor &nbsp;·&nbsp; {pair_name_short}  [Contract Explorer]</div>",
-        unsafe_allow_html=True,
-    )
-
     anchor_month = None
     with st.sidebar:
         if contract_db_available:
@@ -559,8 +586,6 @@ elif page == "Contract Explorer":
             st.divider()
             st.markdown("**Windows**")
             zscore_win2 = st.slider("Z-score lookback (days)", 60, 504, 252, step=21, key="zscore_win2")
-
-    st.subheader("Contract Explorer")
 
     if not contract_db_available:
         st.info("Per-contract data not yet synced — run ingest_contracts.py first.")
@@ -627,9 +652,24 @@ elif page == "Contract Explorer":
             season_df2["x"] = (season_df2["ltd"] - season_df2.index).dt.days
             season_df2["yr"] = season_df2["year1"].astype(int)
             cur_vintage = int(merged["year1"].iloc[-1])
+            hist_vintages = sorted(y for y in season_df2["yr"].unique() if y < cur_vintage)
+
+            lb_col, dte_col = st.columns([3, 2])
+            with lb_col:
+                band_years2 = pick_lookback(f"lb_ce_{pair_key}_{anchor_month}", hist_vintages)
+            with dte_col:
+                # Nearly every vintage only trades in this leg for its final ~364 days
+                # (it starts once the previous vintage expires) - only the very first
+                # vintage runs to 600-700 days, which is what left the chart's left
+                # side blank. 365 shows one full lifecycle.
+                dte_max = st.number_input("Days to expiry (max)", min_value=30, max_value=730,
+                                          value=365, step=30, key="ce_dte_max")
+            season_df2 = season_df2[season_df2["x"] <= dte_max]
+
             fig_season2 = seasonality_bands_fig(
                 season_df2, "x", "val", f"Seasonality — anchor {anchor_month} ({unit_lbl})",
-                "Days to expiry", f"Spread ({unit_lbl})", cur_vintage, cur_vintage - 1, reversed_x=True,
+                "Days to expiry", f"Spread ({unit_lbl})", cur_vintage, cur_vintage - 1,
+                reversed_x=True, band_years=band_years2,
             )
             st.plotly_chart(fig_season2, use_container_width=True)
 
@@ -678,12 +718,6 @@ elif page == "Contract Explorer":
 
 else:
 
-    st.markdown(
-        f"<div style='font-size:0.8rem;color:{MUTED};letter-spacing:0.04em;"
-        f"text-transform:uppercase'>ARB Monitor &nbsp;·&nbsp; {pair_name_short}  [Term Structure]</div>",
-        unsafe_allow_html=True,
-    )
-
     z_choice = None
     with st.sidebar:
         if contract_db_available:
@@ -704,12 +738,11 @@ else:
             if pair_key == "KCRC":
                 z_choice = st.radio(
                     "Z-month pairing", ["ZX", "ZF"], horizontal=True, key="ts_z_choice",
-                    format_func=lambda v: "KC Z vs RC X (same year)" if v == "ZX" else "KC Z vs RC F (next year)",
+                    format_func=lambda v: "ZX (same yr)" if v == "ZX" else "ZF (next yr)",
+                    help="ZX = KC Z vs RC X, same year. ZF = KC Z vs RC F, next year.",
                 )
 
             n_maturities = st.slider("Number of maturities", 4, 16, 8, step=1, key="ts_n")
-
-    st.subheader("Term Structure")
 
     if not contract_db_available:
         st.info("Per-contract data not yet synced — run ingest_contracts.py first.")
