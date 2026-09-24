@@ -346,6 +346,28 @@ with st.sidebar:
 month_map = KCRC_MONTH_MAP if pair_key == "KCRC" else CCLCC_MONTH_MAP
 pair_name_short = "KC / RC  —  Arabica vs Robusta" if pair_key == "KCRC" else "CC / LCC  —  NY vs London Cocoa"
 
+def fx_note():
+    """Cocoa only: say how LCC (quoted in GBP) is brought to USD for the spread."""
+    if pair_key == "CCLCC":
+        st.caption(r"Cocoa spread = CC (\$/MT) − LCC (£/MT) × GBP/USD, so both legs are in \$/MT. GBP/USD chart is at the bottom.")
+
+def gbp_fx_chart():
+    """Cocoa only: GBP/USD line over the chosen Period (last 5 years on Term Structure,
+    which has no period)."""
+    if pair_key != "CCLCC":
+        return
+    g = gbp_full.sort_index()
+    if d_start is None:
+        lo, hi = (g.index.max() - pd.DateOffset(years=5)).date(), g.index.max().date()
+    else:
+        lo, hi = d_start, d_end
+    g = g.loc[str(lo):str(hi)]
+    fig = go.Figure(go.Scatter(x=g.index, y=g, name="GBP/USD", line=dict(color=TEAL, width=1.5)))
+    base_layout(fig, title=f"GBP/USD — used to convert LCC to USD (latest {g.iloc[-1]:.4f})" if len(g) else "GBP/USD",
+                yaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED), hoverformat=".4f"))
+    st.plotly_chart(fig, use_container_width=True)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — Spread Monitor  (rolled front-month, 1st/2nd nearby)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -416,6 +438,8 @@ if page == "Spread Monitor":
 
     spread, z, mu, sig = _view(spread), _view(z_full), _view(mu_full), _view(sig_full)
     l1, l2 = _view(l1_full), _view(l2_full)
+
+    fx_note()
 
     # ── SECTION 1 — Spread Monitor ───────────────────────────────────────────────
 
@@ -574,6 +598,7 @@ if page == "Spread Monitor":
         base_layout(fig_ratio, title="KC/RC Price Ratio (Arabica/Robusta)")
         st.plotly_chart(fig_ratio, use_container_width=True)
 
+    gbp_fx_chart()
     st.caption("ICEBREAKER ARB  —  Data: LSEG (interim) front-month (1st/2nd) + GBP/USD")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -581,6 +606,8 @@ if page == "Spread Monitor":
 # ══════════════════════════════════════════════════════════════════════════════
 
 elif page == "Contract Explorer":
+
+    fx_note()
 
     anchor_month = None
     with st.sidebar:
@@ -724,6 +751,7 @@ elif page == "Contract Explorer":
                 })
             st.dataframe(pd.DataFrame(roll_rows), hide_index=True, use_container_width=True)
 
+    gbp_fx_chart()
     st.caption("ICEBREAKER ARB  —  Data: LSEG (interim) per-contract (KC/RC/CC/LCC)")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -731,6 +759,8 @@ elif page == "Contract Explorer":
 # ══════════════════════════════════════════════════════════════════════════════
 
 else:
+
+    fx_note()
 
     z_choice = None
     with st.sidebar:
@@ -847,4 +877,5 @@ else:
                 })
             st.dataframe(pd.DataFrame(table_rows), hide_index=True, use_container_width=True)
 
+    gbp_fx_chart()
     st.caption("ICEBREAKER ARB  —  Data: LSEG (interim) per-contract (KC/RC/CC/LCC)")
