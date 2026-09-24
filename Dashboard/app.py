@@ -178,18 +178,19 @@ def zscore(spread: pd.Series, window: int) -> pd.Series:
     sig = spread.rolling(window).std()
     return (spread - mu) / sig
 
-def pick_lookback(key: str, hist_years: list):
-    """Radio for how many past years the seasonal bands/average use.
-    hist_years = completed years available (current year excluded).
-    Returns the years actually used."""
-    n_all = len(hist_years)
-    choice = st.radio(
-        "Lookback", ["5Y", "10Y", "All"], index=2, horizontal=True, key=key,
-        label_visibility="collapsed",
-        format_func=lambda v: f"All ({n_all} yrs)" if v == "All" else v,
-    )
-    n = {"5Y": 5, "10Y": 10}.get(choice)
-    used = hist_years[-n:] if n else hist_years
+def lookback_years(hist_years: list):
+    """Past years feeding the seasonal bands/average, from the global Period radio:
+    5Y / 10Y = that many most recent completed years, All = every completed year,
+    Custom = completed years overlapping the chosen date range (all if none).
+    hist_years excludes the current year."""
+    if period == "5Y":
+        used = hist_years[-5:]
+    elif period == "10Y":
+        used = hist_years[-10:]
+    elif period == "Custom":
+        used = [y for y in hist_years if d_start.year <= y <= d_end.year] or hist_years
+    else:
+        used = hist_years
     if used:
         st.caption(f"Average of {len(used)} yrs ({used[0]}–{used[-1]}), excl. current year.")
     return used
@@ -290,6 +291,33 @@ if contract_db_available:
     _maxs += [contract_db[n]["Date"].max() for n in contract_db]
 DATA_MIN, DATA_MAX = pd.Timestamp(min(_mins)), pd.Timestamp(max(_maxs))
 
+period, d_start, d_end = "5Y", None, None
+
+def render_period(box, n_all_yrs: int):
+    """Global Period radio (5Y / 10Y / All (N yrs) / Custom). Drives both the date
+    window of the time-series charts and which past years feed the seasonality
+    bands/average. Returns (period, d_start, d_end)."""
+    opts = ["5Y", "10Y", "All", "Custom"]
+    with box:
+        # choice remembered manually: the "All" label differs per tab, which would
+        # otherwise look like a new widget to Streamlit and reset it on tab switch
+        choice = st.radio(
+            "Period", opts, index=opts.index(st.session_state.get("period_sel", "5Y")),
+            horizontal=True, key=f"period_{page}", label_visibility="collapsed",
+            format_func=lambda v: f"All ({n_all_yrs} yrs)" if v == "All" else v,
+        )
+        st.session_state["period_sel"] = choice
+        if choice == "Custom":
+            c1, c2 = st.columns(2)
+            f = c1.date_input("From", value=max(DATA_MIN, DATA_MAX - pd.DateOffset(years=3)).date(),
+                              min_value=DATA_MIN.date(), max_value=DATA_MAX.date(), key="period_from")
+            t = c2.date_input("To", value=DATA_MAX.date(),
+                              min_value=DATA_MIN.date(), max_value=DATA_MAX.date(), key="period_to")
+            return choice, *sorted([f, t])
+    if choice == "All":
+        return choice, DATA_MIN.date(), DATA_MAX.date()
+    return choice, (DATA_MAX - pd.DateOffset(years={"5Y": 5, "10Y": 10}[choice])).date(), DATA_MAX.date()
+
 # ── Sidebar — shared controls ────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -307,27 +335,13 @@ with st.sidebar:
     else:
         unit_choice = "$/MT"
 
-    # Global period for the time-series charts (Spread Monitor + Contract Explorer).
-    # Not shown on Term Structure (single-date snapshot) and not applied to the
-    # seasonality charts (those always use full history + their own lookback radio).
-    d_start = d_end = None
+    # Global period radio lives here but is filled in by render_period() once the
+    # tab has built its series, so "All (N yrs)" counts that tab's real data.
+    period_box = None
     if page != "Term Structure":
         st.divider()
         st.markdown("**Period**")
-        period = st.radio("Period", ["6M", "1Y", "3Y", "5Y", "10Y", "Custom"], index=3,
-                          horizontal=True, key="period", label_visibility="collapsed")
-        if period == "Custom":
-            _c1, _c2 = st.columns(2)
-            _from = _c1.date_input("From", value=max(DATA_MIN, DATA_MAX - pd.DateOffset(years=3)).date(),
-                                   min_value=DATA_MIN.date(), max_value=DATA_MAX.date(), key="period_from")
-            _to = _c2.date_input("To", value=DATA_MAX.date(),
-                                 min_value=DATA_MIN.date(), max_value=DATA_MAX.date(), key="period_to")
-            d_start, d_end = sorted([_from, _to])
-        else:
-            _off = {"6M": pd.DateOffset(months=6), "1Y": pd.DateOffset(years=1), "3Y": pd.DateOffset(years=3),
-                    "5Y": pd.DateOffset(years=5), "10Y": pd.DateOffset(years=10)}[period]
-            d_end = DATA_MAX.date()
-            d_start = (DATA_MAX - _off).date()
+        period_box = st.container()
 
 month_map = KCRC_MONTH_MAP if pair_key == "KCRC" else CCLCC_MONTH_MAP
 pair_name_short = "KC / RC  —  Arabica vs Robusta" if pair_key == "KCRC" else "CC / LCC  —  NY vs London Cocoa"
@@ -376,6 +390,8 @@ if page == "Spread Monitor":
         has_fx       = True
 
     spread_full = spread.copy()  # full history, independent of the date-range slider below — seasonality needs every year
+
+    period, d_start, d_end = render_period(period_box, spread.index.year.nunique() - 1)
 
     # ── Compute on the full history, then slice to the chosen period for display —
     #    a 252d rolling window computed over a 6M slice would be all NaN. ────────
@@ -432,7 +448,7 @@ if page == "Spread Monitor":
     season_df["yr"] = season_df.index.year
     cur_yr = season_df["yr"].max()
     hist_years = sorted(y for y in season_df["yr"].unique() if y < cur_yr)
-    band_years = pick_lookback(f"lb_sm_{pair_key}", hist_years)
+    band_years = lookback_years(hist_years)
     fig_season = seasonality_bands_fig(
         season_df, "x", "val", f"Seasonality — {spread_label}",
         "Day of year", spread_label, cur_yr, cur_yr - 1, band_years=band_years,
@@ -609,6 +625,8 @@ elif page == "Contract Explorer":
             spr = (leg1c - leg2c).dropna()
             unit_lbl = unit_choice if pair_key == "KCRC" else "$/MT"
 
+            period, d_start, d_end = render_period(period_box, merged["year1"].nunique() - 1)
+
             tag1 = leg1_name + m1 + merged["year1"].astype(str).str[-2:]
             tag2 = leg2_name + m2 + merged["year2"].astype(str).str[-2:]
 
@@ -650,7 +668,7 @@ elif page == "Contract Explorer":
 
             lb_col, dte_col = st.columns([3, 2])
             with lb_col:
-                band_years2 = pick_lookback(f"lb_ce_{pair_key}_{anchor_month}", hist_vintages)
+                band_years2 = lookback_years(hist_vintages)
             with dte_col:
                 # Nearly every vintage only trades in this leg for its final ~364 days
                 # (it starts once the previous vintage expires) - only the very first
