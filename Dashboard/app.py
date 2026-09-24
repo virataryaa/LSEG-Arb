@@ -177,6 +177,47 @@ def zscore(spread: pd.Series, window: int) -> pd.Series:
     sig = spread.rolling(window).std()
     return (spread - mu) / sig
 
+def seasonality_bands_fig(long_df: pd.DataFrame, x_col: str, val_col: str, title: str,
+                           xaxis_title: str, yaxis_title: str, current_year: int, last_year: int,
+                           reversed_x: bool = False, band_smooth: int = 15):
+    """Nested Min-Max / 10-90 / 25-75 percentile bands + dotted average +
+    bold current-year line + red last-year line. long_df has one row per
+    (x_col, val_col, yr) observation.
+
+    Daily data across only ~10-15 years means each x value has just that many
+    observations (and some fewer, from weekends/holidays), so raw per-day
+    percentiles are extremely spiky. The bands (not the actual year lines) are
+    smoothed with a centred rolling mean over `band_smooth` neighbouring x values."""
+    band = long_df.groupby(x_col)[val_col].agg(
+        lo="min", p10=lambda s: s.quantile(0.10), p25=lambda s: s.quantile(0.25),
+        avg="mean", p75=lambda s: s.quantile(0.75), p90=lambda s: s.quantile(0.90), hi="max",
+    ).sort_index()
+    if band_smooth > 1:
+        band = band.rolling(band_smooth, center=True, min_periods=1).mean()
+
+    fig = go.Figure()
+    band_pairs = [("lo", "hi", "rgba(37,99,235,0.08)", "Min–Max"), ("p10", "p90", "rgba(37,99,235,0.16)", "10th–90th pct"), ("p25", "p75", "rgba(37,99,235,0.28)", "25th–75th pct")]
+    for lo_col, hi_col, color, name in band_pairs:
+        fig.add_trace(go.Scatter(x=band.index, y=band[hi_col], line=dict(width=0), showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=band.index, y=band[lo_col], fill="tonexty", fillcolor=color, line=dict(width=0), name=name))
+    fig.add_trace(go.Scatter(x=band.index, y=band["avg"], mode="lines", name="Average", line=dict(color=MUTED, width=1.5, dash="dot")))
+
+    for yr, color, width in [(last_year, RED, 2), (current_year, TEAL, 3)]:
+        grp = long_df[long_df["yr"] == yr].sort_values(x_col)
+        if grp.empty:
+            continue
+        fig.add_trace(go.Scatter(x=grp[x_col], y=grp[val_col], mode="lines", name=str(yr), line=dict(color=color, width=width)))
+
+    xaxis = dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED), title=dict(text=xaxis_title, font=dict(color=MUTED, size=11)), hoverformat=".1f")
+    if reversed_x:
+        xaxis["autorange"] = "reversed"
+    base_layout(
+        fig, title=title, xaxis=xaxis,
+        yaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED), hoverformat=".1f",
+                   title=dict(text=yaxis_title, font=dict(color=MUTED, size=11))),
+    )
+    return fig
+
 # ── Header + tab selector ───────────────────────────────────────────────────────
 
 st.markdown(
@@ -266,6 +307,8 @@ if page == "Spread Monitor":
         spread_label = "NY Premium over London Cocoa ($/MT)"
         pair_title   = f"{pair_name_short}  [{src_tag}]"
         has_fx       = True
+
+    spread_full = spread.copy()  # full history, independent of the date-range slider below — seasonality needs every year
 
     # ── Date range ────────────────────────────────────────────────────────────
 
@@ -362,6 +405,17 @@ if page == "Spread Monitor":
         line=dict(color=TEAL, width=2), showlegend=True))
     base_layout(fig_sp, title=spread_label)
     st.plotly_chart(fig_sp, use_container_width=True)
+
+    # — Seasonality —
+    season_df = spread_full.rename("val").to_frame()
+    season_df["x"] = season_df.index.dayofyear
+    season_df["yr"] = season_df.index.year
+    cur_yr = season_df["yr"].max()
+    fig_season = seasonality_bands_fig(
+        season_df, "x", "val", f"Seasonality — {spread_label}",
+        "Day of year", spread_label, cur_yr, cur_yr - 1,
+    )
+    st.plotly_chart(fig_season, use_container_width=True)
 
     # — Z-score —
     fig_z = go.Figure()
@@ -562,6 +616,22 @@ elif page == "Contract Explorer":
                                          line=dict(color=TEAL, width=2)))
             base_layout(fig_sp2, title=f"Spread — anchor {anchor_month} ({unit_lbl})")
             st.plotly_chart(fig_sp2, use_container_width=True)
+
+            # — Seasonality (by days to expiry, not calendar day - a vintage's own
+            # lifecycle is what's comparable year to year here, not the date it fell on) —
+            ltd_map = {yr: get_ltd(db1, m1, yr) for yr in merged["year1"].unique()}
+            season_df2 = spr.rename("val").to_frame()
+            season_df2["year1"] = merged["year1"].reindex(season_df2.index)
+            season_df2["ltd"] = season_df2["year1"].map(ltd_map)
+            season_df2 = season_df2.dropna(subset=["ltd"])
+            season_df2["x"] = (season_df2["ltd"] - season_df2.index).dt.days
+            season_df2["yr"] = season_df2["year1"].astype(int)
+            cur_vintage = int(merged["year1"].iloc[-1])
+            fig_season2 = seasonality_bands_fig(
+                season_df2, "x", "val", f"Seasonality — anchor {anchor_month} ({unit_lbl})",
+                "Days to expiry", f"Spread ({unit_lbl})", cur_vintage, cur_vintage - 1, reversed_x=True,
+            )
+            st.plotly_chart(fig_season2, use_container_width=True)
 
             # — Z-score —
             z2 = zscore(spr, zscore_win2)
