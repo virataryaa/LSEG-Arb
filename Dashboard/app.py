@@ -282,6 +282,14 @@ page = st.segmented_control(
 )
 page = page or "Spread Monitor"
 
+# Full date extent across all price data (period presets count back from DATA_MAX).
+_mins = [front[n].index.min() for n in front]
+_maxs = [front[n].index.max() for n in front]
+if contract_db_available:
+    _mins += [contract_db[n]["Date"].min() for n in contract_db]
+    _maxs += [contract_db[n]["Date"].max() for n in contract_db]
+DATA_MIN, DATA_MAX = pd.Timestamp(min(_mins)), pd.Timestamp(max(_maxs))
+
 # ── Sidebar — shared controls ────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -298,6 +306,28 @@ with st.sidebar:
         unit_choice = st.radio("Units", ["$/MT", "¢/lb"], index=1, horizontal=True, label_visibility="collapsed")
     else:
         unit_choice = "$/MT"
+
+    # Global period for the time-series charts (Spread Monitor + Contract Explorer).
+    # Not shown on Term Structure (single-date snapshot) and not applied to the
+    # seasonality charts (those always use full history + their own lookback radio).
+    d_start = d_end = None
+    if page != "Term Structure":
+        st.divider()
+        st.markdown("**Period**")
+        period = st.radio("Period", ["6M", "1Y", "3Y", "5Y", "10Y", "Custom"], index=3,
+                          horizontal=True, key="period", label_visibility="collapsed")
+        if period == "Custom":
+            _c1, _c2 = st.columns(2)
+            _from = _c1.date_input("From", value=max(DATA_MIN, DATA_MAX - pd.DateOffset(years=3)).date(),
+                                   min_value=DATA_MIN.date(), max_value=DATA_MAX.date(), key="period_from")
+            _to = _c2.date_input("To", value=DATA_MAX.date(),
+                                 min_value=DATA_MIN.date(), max_value=DATA_MAX.date(), key="period_to")
+            d_start, d_end = sorted([_from, _to])
+        else:
+            _off = {"6M": pd.DateOffset(months=6), "1Y": pd.DateOffset(years=1), "3Y": pd.DateOffset(years=3),
+                    "5Y": pd.DateOffset(years=5), "10Y": pd.DateOffset(years=10)}[period]
+            d_end = DATA_MAX.date()
+            d_start = (DATA_MAX - _off).date()
 
 month_map = KCRC_MONTH_MAP if pair_key == "KCRC" else CCLCC_MONTH_MAP
 pair_name_short = "KC / RC  —  Arabica vs Robusta" if pair_key == "KCRC" else "CC / LCC  —  NY vs London Cocoa"
@@ -347,70 +377,29 @@ if page == "Spread Monitor":
 
     spread_full = spread.copy()  # full history, independent of the date-range slider below — seasonality needs every year
 
-    # ── Date range ────────────────────────────────────────────────────────────
+    # ── Compute on the full history, then slice to the chosen period for display —
+    #    a 252d rolling window computed over a 6M slice would be all NaN. ────────
 
-    date_min = spread.index.min().date()
-    date_max = spread.index.max().date()
+    z_full   = zscore(spread, zscore_win)
+    mu_full  = spread.rolling(zscore_win).mean()
+    sig_full = spread.rolling(zscore_win).std()
 
-    def _dates_to_slider() -> None:
-        """Push a manual Start/End edit back into the slider."""
-        s, e = st.session_state.ds, st.session_state.de
-        if s > e:
-            s, e = e, s
-        st.session_state.rng = (s, e)
-
-    # Single source of truth for the range; the slider owns "rng", the two date
-    # pickers mirror it. Keyed widgets ignore `value=` after first render, so the
-    # mirroring has to go through session state or the slider gets overruled.
-    if "rng" not in st.session_state:
-        st.session_state.rng = (date_min, date_max)
-
-    s0, e0 = st.session_state.rng
-    s0 = min(max(s0, date_min), date_max)
-    e0 = min(max(e0, date_min), date_max)
-    if s0 > e0:
-        s0, e0 = e0, s0
-    st.session_state.rng = (s0, e0)
-    st.session_state.ds  = s0
-    st.session_state.de  = e0
-
-    with st.sidebar:
-        st.divider()
-        st.markdown("**Date range**")
-        st.slider(
-            "range", min_value=date_min, max_value=date_max,
-            format="DD MMM YYYY", key="rng",
-            label_visibility="collapsed",
-        )
-        cal_l, cal_r = st.columns(2)
-        with cal_l:
-            st.date_input("Start", min_value=date_min, max_value=date_max,
-                          key="ds", on_change=_dates_to_slider)
-        with cal_r:
-            st.date_input("End",   min_value=date_min, max_value=date_max,
-                          key="de", on_change=_dates_to_slider)
-
-    d_start, d_end = st.session_state.rng
-
-    spread  = spread.loc[str(d_start): str(d_end)]
-    gbp_raw = gbp_raw.loc[str(d_start): str(d_end)]
-
-    # ── Compute ───────────────────────────────────────────────────────────────
-
-    z   = zscore(spread, zscore_win)
-    mu  = spread.rolling(zscore_win).mean()
-    sig = spread.rolling(zscore_win).std()
-
-    # l1 / l2 in $/MT — used by all sections
+    # l1 / l2 in the chosen units — used by all sections
     if pair_key == "KCRC":
-        l1 = (_pick("KC") * KC_FACTOR).loc[str(d_start):str(d_end)]
-        l2 = _pick("RC").loc[str(d_start):str(d_end)]
+        l1_full = _pick("KC") * KC_FACTOR
+        l2_full = _pick("RC")
         if unit_choice == "¢/lb":
-            l1 = l1 / KC_FACTOR
-            l2 = l2 / KC_FACTOR
+            l1_full = l1_full / KC_FACTOR
+            l2_full = l2_full / KC_FACTOR
     else:
-        l1 = _pick("CC").loc[str(d_start):str(d_end)]
-        l2 = (_pick("LCC") * gbp_raw).dropna().loc[str(d_start):str(d_end)]
+        l1_full = _pick("CC")
+        l2_full = (_pick("LCC") * gbp_raw).dropna()
+
+    def _view(x):
+        return x.loc[str(d_start):str(d_end)]
+
+    spread, z, mu, sig = _view(spread), _view(z_full), _view(mu_full), _view(sig_full)
+    l1, l2 = _view(l1_full), _view(l2_full)
 
     # ── SECTION 1 — Spread Monitor ───────────────────────────────────────────────
 
@@ -551,9 +540,10 @@ if page == "Spread Monitor":
                    "Roasters blend the two; extreme ratios historically mean-revert "
                    "as substitution economics kick in.")
 
-        ratio = l1 / l2
-        mu_r  = ratio.rolling(zscore_win).mean()
-        sig_r = ratio.rolling(zscore_win).std()
+        ratio_full = l1_full / l2_full
+        ratio = _view(ratio_full)
+        mu_r  = _view(ratio_full.rolling(zscore_win).mean())
+        sig_r = _view(ratio_full.rolling(zscore_win).std())
 
         fig_ratio = go.Figure()
         fig_ratio.add_trace(go.Scatter(x=ratio.index, y=mu_r + sig_r,
@@ -625,19 +615,23 @@ elif page == "Contract Explorer":
             mu2  = spr.rolling(zscore_win2).mean()
             sig2 = spr.rolling(zscore_win2).std()
 
+            def _v(x):
+                return x.loc[str(d_start):str(d_end)]
+            spr_v, mu2_v, sig2_v = _v(spr), _v(mu2), _v(sig2)
+
             # — Spread + bands —
             fig_sp2 = go.Figure()
-            fig_sp2.add_trace(go.Scatter(x=spr.index, y=mu2 + 2*sig2, name="+2σ",
+            fig_sp2.add_trace(go.Scatter(x=spr_v.index, y=mu2_v + 2*sig2_v, name="+2σ",
                                          line=dict(color=RED, width=1, dash="dot")))
-            fig_sp2.add_trace(go.Scatter(x=spr.index, y=mu2 + sig2, name="+1σ",
+            fig_sp2.add_trace(go.Scatter(x=spr_v.index, y=mu2_v + sig2_v, name="+1σ",
                                          line=dict(color=AMBER, width=1, dash="dash")))
-            fig_sp2.add_trace(go.Scatter(x=spr.index, y=mu2, name="Mean",
+            fig_sp2.add_trace(go.Scatter(x=spr_v.index, y=mu2_v, name="Mean",
                                          line=dict(color=MUTED, width=1.5)))
-            fig_sp2.add_trace(go.Scatter(x=spr.index, y=mu2 - sig2, name="-1σ",
+            fig_sp2.add_trace(go.Scatter(x=spr_v.index, y=mu2_v - sig2_v, name="-1σ",
                                          line=dict(color=AMBER, width=1, dash="dash"), showlegend=False))
-            fig_sp2.add_trace(go.Scatter(x=spr.index, y=mu2 - 2*sig2, name="-2σ",
+            fig_sp2.add_trace(go.Scatter(x=spr_v.index, y=mu2_v - 2*sig2_v, name="-2σ",
                                          line=dict(color=RED, width=1, dash="dot"), showlegend=False))
-            fig_sp2.add_trace(go.Scatter(x=spr.index, y=spr, name="Spread",
+            fig_sp2.add_trace(go.Scatter(x=spr_v.index, y=spr_v, name="Spread",
                                          line=dict(color=TEAL, width=2)))
             base_layout(fig_sp2, title=f"Spread — anchor {anchor_month} ({unit_lbl})")
             st.plotly_chart(fig_sp2, use_container_width=True)
@@ -676,7 +670,8 @@ elif page == "Contract Explorer":
             # — Z-score —
             z2 = zscore(spr, zscore_win2)
             fig_z2 = go.Figure()
-            fig_z2.add_trace(go.Scatter(x=z2.index, y=z2, name="Z-score", line=dict(color=TEAL, width=1.5)))
+            z2_v = _v(z2)
+            fig_z2.add_trace(go.Scatter(x=z2_v.index, y=z2_v, name="Z-score", line=dict(color=TEAL, width=1.5)))
             fig_z2.add_hline(y=0, line_color=MUTED, line_width=1)
             base_layout(fig_z2, title=f"Z-Score  ({zscore_win2}d rolling)",
                         yaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED), range=[-4, 4]))
@@ -684,14 +679,15 @@ elif page == "Contract Explorer":
 
             # — Individual legs —
             fig_legs2 = go.Figure()
+            leg1_v, leg2_v = _v(leg1c), _v(leg2c)
             fig_legs2.add_trace(go.Scatter(
-                x=leg1c.index, y=leg1c, name=f"{leg1_name} {m1} (continuous)",
+                x=leg1_v.index, y=leg1_v, name=f"{leg1_name} {m1} (continuous)",
                 line=dict(color=TEAL, width=1.5),
-                customdata=tag1, hovertemplate="%{customdata}<br>%{y:.2f}<extra></extra>"))
+                customdata=tag1.reindex(leg1_v.index), hovertemplate="%{customdata}<br>%{y:.2f}<extra></extra>"))
             fig_legs2.add_trace(go.Scatter(
-                x=leg2c.index, y=leg2c, name=f"{leg2_name} {m2} (continuous)",
+                x=leg2_v.index, y=leg2_v, name=f"{leg2_name} {m2} (continuous)",
                 line=dict(color=AMBER, width=1.5),
-                customdata=tag2, hovertemplate="%{customdata}<br>%{y:.2f}<extra></extra>"))
+                customdata=tag2.reindex(leg2_v.index), hovertemplate="%{customdata}<br>%{y:.2f}<extra></extra>"))
             base_layout(fig_legs2, title=f"Individual Legs ({unit_lbl})",
                         yaxis=dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED)))
             st.plotly_chart(fig_legs2, use_container_width=True)
