@@ -41,11 +41,11 @@ PLOT   = "rgba(0,0,0,0)"
 GRID   = "rgba(0,0,0,0.06)"
 FONT   = "#374151"
 MUTED  = "#9ca3af"
-TEAL   = "#2563eb"
-GREEN  = "#16a34a"
-RED    = "#dc2626"
-AMBER  = "#d97706"
 NAVY   = "#0a2463"   # selected-pill / current-year colour, same as the Cotton On-Call dashboard
+TEAL   = NAVY        # main line colour (name kept - every primary series uses it)
+AMBER  = "#c98a1f"   # gold: navy's complement, for the second leg / +-1 sigma bands
+RED    = "#c94a4a"   # muted red, same as Cotton On-Call
+GREEN  = "#1f9d6f"   # muted green, same as Cotton On-Call
 
 def base_layout(fig, **kw):
     ax = dict(gridcolor=GRID, linecolor=GRID, tickfont=dict(color=MUTED),
